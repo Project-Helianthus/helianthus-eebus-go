@@ -7,7 +7,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
-	spinemodel "github.com/enbility/spine-go/model"
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )

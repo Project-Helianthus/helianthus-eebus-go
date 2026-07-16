@@ -1,12 +1,12 @@
 package evcc
 
 import (
-	"github.com/enbility/eebus-go/features/client"
-	"github.com/enbility/eebus-go/usecases/internal"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/internal"
 	"github.com/Project-Helianthus/helianthus-ship-go/logging"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 // handle SPINE events

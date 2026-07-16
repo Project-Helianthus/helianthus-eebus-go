@@ -3,14 +3,14 @@
 package mocks
 
 import (
-	eebus_goapi "github.com/enbility/eebus-go/api"
-	api "github.com/enbility/eebus-go/usecases/api"
+	eebus_goapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	api "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
 
 	mock "github.com/stretchr/testify/mock"
 
-	model "github.com/enbility/spine-go/model"
+	model "github.com/Project-Helianthus/helianthus-spine-go/model"
 
-	spine_goapi "github.com/enbility/spine-go/api"
+	spine_goapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 
 	time "time"
 )

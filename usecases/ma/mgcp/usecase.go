@@ -1,12 +1,12 @@
 package mgcp
 
 import (
-	"github.com/enbility/eebus-go/api"
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	usecase "github.com/enbility/eebus-go/usecases/usecase"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	usecase "github.com/Project-Helianthus/helianthus-eebus-go/usecases/usecase"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
 
 type MGCP struct {

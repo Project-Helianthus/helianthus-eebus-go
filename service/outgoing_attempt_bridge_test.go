@@ -4,11 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/enbility/eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
-	spinemodel "github.com/enbility/spine-go/model"
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

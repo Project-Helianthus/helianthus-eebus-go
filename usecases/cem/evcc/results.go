@@ -3,8 +3,8 @@ package evcc
 import (
 	"fmt"
 
-	"github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 func (e *EVCC) HandleResponse(responseMsg api.ResponseMessage) {

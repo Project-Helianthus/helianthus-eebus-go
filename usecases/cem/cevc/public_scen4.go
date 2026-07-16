@@ -3,12 +3,12 @@ package cevc
 import (
 	"time"
 
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/features/client"
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 func (e *CEVC) ChargePlanConstraints(entity spineapi.EntityRemoteInterface) ([]ucapi.DurationSlotValue, error) {

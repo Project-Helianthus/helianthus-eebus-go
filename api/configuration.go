@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 const defaultPort int = 4711

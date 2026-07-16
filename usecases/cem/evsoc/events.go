@@ -1,11 +1,11 @@
 package evsoc
 
 import (
-	"github.com/enbility/eebus-go/features/client"
-	internal "github.com/enbility/eebus-go/usecases/internal"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	internal "github.com/Project-Helianthus/helianthus-eebus-go/usecases/internal"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 // handle SPINE events

@@ -7,15 +7,15 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/enbility/eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	"github.com/Project-Helianthus/helianthus-ship-go/hub"
 	"github.com/Project-Helianthus/helianthus-ship-go/logging"
 	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
 
 // A service is the central element of an EEBUS service

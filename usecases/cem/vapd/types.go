@@ -1,6 +1,6 @@
 package vapd
 
-import "github.com/enbility/eebus-go/api"
+import "github.com/Project-Helianthus/helianthus-eebus-go/api"
 
 const (
 	// Update of the list of remote entities supporting the Use Case

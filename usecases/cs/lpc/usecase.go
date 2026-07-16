@@ -3,16 +3,16 @@ package lpc
 import (
 	"sync"
 
-	"github.com/enbility/eebus-go/api"
-	features "github.com/enbility/eebus-go/features/client"
-	"github.com/enbility/eebus-go/features/server"
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	"github.com/enbility/eebus-go/usecases/usecase"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	features "github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/server"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/usecase"
 	"github.com/Project-Helianthus/helianthus-ship-go/logging"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
-	"github.com/enbility/spine-go/util"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 type LPC struct {

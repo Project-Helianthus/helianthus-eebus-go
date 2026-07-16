@@ -1,9 +1,9 @@
 package internal
 
 import (
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/features/client"
-	spineapi "github.com/enbility/spine-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 // return the current manufacturer data for a entity
