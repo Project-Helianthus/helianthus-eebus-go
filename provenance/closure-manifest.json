@@ -1,0 +1,64 @@
+{
+  "dependency_control_inputs": [
+    ".github/workflows/default.yml",
+    "go.mod",
+    "go.sum"
+  ],
+  "fork": {
+    "intended_prerelease": "v0.7.0-helianthus.1",
+    "lifecycle": "temporary_downstream_patch_carrier",
+    "origin": "https://github.com/Project-Helianthus/helianthus-eebus-go.git"
+  },
+  "license": {
+    "path": "LICENSE",
+    "sha256": "0871acb60d194272cd91ad02dcaf0102d8047a993f1b00973da4c9c2cba845a4"
+  },
+  "module": "github.com/Project-Helianthus/helianthus-eebus-go",
+  "notice_inventory": [],
+  "reviewed_dependencies": [
+    {
+      "license": {
+        "path": "LICENSE",
+        "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
+      },
+      "module": "github.com/Project-Helianthus/helianthus-ship-go",
+      "peeled_commit_sha": "3d11169b8cb3e828cd24af066aac016c7edeb23d",
+      "provenance_manifest": {
+        "path": "provenance/closure-manifest.json",
+        "sha256": "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
+      },
+      "tag_object_sha": "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7",
+      "tree_sha": "1298a667e4d24c15027adf3775d99182cc174f24",
+      "version": "v0.6.1-helianthus.1"
+    },
+    {
+      "license": {
+        "path": "LICENSE",
+        "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
+      },
+      "module": "github.com/Project-Helianthus/helianthus-spine-go",
+      "peeled_commit_sha": "c85a449cc44c7e1fd2a44f8b10724d81e89bb260",
+      "provenance_manifest": {
+        "path": "provenance/closure-manifest.json",
+        "sha256": "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"
+      },
+      "tag_object_sha": "2722d31718aa89b1d31faf16b5c14bbee692e2de",
+      "tree_sha": "02236304d8c74914a701be3896eaaf94be32e2d6",
+      "version": "v0.7.1-helianthus.1"
+    }
+  ],
+  "schema": "helianthus.provenance.closure-manifest.v1",
+  "source_header_inventory": {
+    "globs": [
+      "**/*.go"
+    ],
+    "headers": []
+  },
+  "upstream": {
+    "peeled_commit_sha": "99f07ff79819b728dd2fe37472c4a26865d8076c",
+    "remote": "https://github.com/enbility/eebus-go.git",
+    "tag": "v0.7.0",
+    "tag_object_sha": "e4677eb9c46f1cc46c2559027c35fbf39766bcfb",
+    "tree_sha": "fee9de0ecb34dcb7c4165922fd49fedd42d8df23"
+  }
+}

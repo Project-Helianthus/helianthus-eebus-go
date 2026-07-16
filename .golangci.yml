@@ -44,6 +44,20 @@ linters:
 issues:
   # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
+    # Mechanical fork baseline: exact upstream eebus v0.7.0 expression.
+    - path: ^usecases/cem/cevc/public_scen2\.go$
+      text: "G115: integer overflow conversion int -> uint"
+      source: "^\\s*TimeSeriesSlotId: util\\.Ptr\\(model\\.TimeSeriesSlotIdType\\(index\\)\\),$"
+      linters:
+        - gosec
+
+    # The prior bridge test intentionally provides the empty no-op gate result.
+    - path: ^service/outgoing_attempt_bridge_test\.go$
+      text: "return both a `nil` error and an invalid value"
+      source: "^\\s*return nil, nil$"
+      linters:
+        - nilnil
+
     # Exclude some linters from running on tests files.
     - path: _test\.go
       linters:
