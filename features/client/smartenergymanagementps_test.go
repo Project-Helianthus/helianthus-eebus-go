@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	shipapi "github.com/enbility/ship-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	spineapi "github.com/enbility/spine-go/api"
 	"github.com/enbility/spine-go/model"
 	"github.com/enbility/spine-go/util"

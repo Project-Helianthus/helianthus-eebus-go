@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	shipmodel "github.com/enbility/ship-go/model"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 	spinemodel "github.com/enbility/spine-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

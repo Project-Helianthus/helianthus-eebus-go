@@ -3,7 +3,7 @@ package vapd
 import (
 	"github.com/enbility/eebus-go/features/client"
 	"github.com/enbility/eebus-go/usecases/internal"
-	"github.com/enbility/ship-go/logging"
+	"github.com/Project-Helianthus/helianthus-ship-go/logging"
 	spineapi "github.com/enbility/spine-go/api"
 	"github.com/enbility/spine-go/model"
 	"github.com/enbility/spine-go/util"

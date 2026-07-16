@@ -4,11 +4,11 @@ package mocks
 
 import (
 	api "github.com/enbility/eebus-go/api"
-	logging "github.com/enbility/ship-go/logging"
+	logging "github.com/Project-Helianthus/helianthus-ship-go/logging"
 
 	mock "github.com/stretchr/testify/mock"
 
-	ship_goapi "github.com/enbility/ship-go/api"
+	ship_goapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 
 	spine_goapi "github.com/enbility/spine-go/api"
 )

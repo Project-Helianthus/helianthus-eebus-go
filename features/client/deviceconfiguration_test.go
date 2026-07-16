@@ -3,7 +3,7 @@ package client
 import (
 	"testing"
 
-	shipmocks "github.com/enbility/ship-go/mocks"
+	shipmocks "github.com/Project-Helianthus/helianthus-ship-go/mocks"
 	spineapi "github.com/enbility/spine-go/api"
 	"github.com/enbility/spine-go/mocks"
 	"github.com/enbility/spine-go/model"

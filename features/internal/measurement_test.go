@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/enbility/eebus-go/features/internal"
-	shipmocks "github.com/enbility/ship-go/mocks"
+	shipmocks "github.com/Project-Helianthus/helianthus-ship-go/mocks"
 	spineapi "github.com/enbility/spine-go/api"
 	"github.com/enbility/spine-go/model"
 	"github.com/enbility/spine-go/util"

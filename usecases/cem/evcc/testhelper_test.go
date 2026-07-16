@@ -8,7 +8,7 @@ import (
 	"github.com/enbility/eebus-go/api"
 	"github.com/enbility/eebus-go/mocks"
 	"github.com/enbility/eebus-go/service"
-	"github.com/enbility/ship-go/cert"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	spineapi "github.com/enbility/spine-go/api"
 	spinemocks "github.com/enbility/spine-go/mocks"
 	"github.com/enbility/spine-go/model"

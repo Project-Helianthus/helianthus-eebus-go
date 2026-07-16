@@ -1,3 +1,5 @@
+github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1 h1:nI0KxwyLJnG8v7q6JASa51VY54xDg4fPt3c7+FCj6Sk=
+github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1/go.mod h1:qPqQTDqmPjyOJCr0JMNjhSC1XW1k3h5P/EZqRGy80Vs=
 github.com/ahmetb/go-linq/v3 v3.2.0 h1:BEuMfp+b59io8g5wYzNoFe9pWPalRklhlhbiU3hYZDE=
 github.com/ahmetb/go-linq/v3 v3.2.0/go.mod h1:haQ3JfOeWK8HpVxMtHHEMPVgBKiYyQ+f1/kLZh/cj9U=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

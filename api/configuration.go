@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/enbility/ship-go/mdns"
+	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	"github.com/enbility/spine-go/model"
 )
 

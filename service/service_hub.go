@@ -1,7 +1,7 @@
 package service
 
 import (
-	shipapi "github.com/enbility/ship-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
 var _ shipapi.HubReaderInterface = (*Service)(nil)
