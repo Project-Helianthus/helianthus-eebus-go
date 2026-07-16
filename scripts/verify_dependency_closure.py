@@ -184,7 +184,7 @@ def auto_class(path: str) -> str | None:
         return "taskfile"
     if name.startswith(".goreleaser.") or BUILD_CONFIG_RE.search(name):
         return "build_release_config"
-    if path.startswith("contracttests/"):
+    if path.startswith("contracttests/") or name.endswith("_test.go"):
         return None
     if GO_SOURCE_RE.search(name):
         return "source_identity"
@@ -434,7 +434,10 @@ def extract_references(
         if yaml_is_malformed(text):
             add_violation(violations, path, input_class, "malformed_control_input")
             return [], []
-        references.extend(PATH_TOKEN_RE.findall(text))
+        literal_lines = "\n".join(
+            line for line in text.splitlines() if "{{" not in line and "}}" not in line
+        )
+        references.extend(PATH_TOKEN_RE.findall(literal_lines))
         selections.extend(yaml_selections(text))
     elif suffix == ".py":
         try:
