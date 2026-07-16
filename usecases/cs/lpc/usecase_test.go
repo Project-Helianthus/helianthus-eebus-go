@@ -42,12 +42,15 @@ func (s *CsLPCSuite) Test_loadControlWriteCB() {
 		DeviceRemote: s.remoteDevice,
 		EntityRemote: s.monitoredEntity,
 	}
+	withMsgCounter := func(source spineapi.Message, counter model.MsgCounterType) spineapi.Message {
+		source.RequestHeader = &model.HeaderType{MsgCounter: util.Ptr(counter)}
+		return source
+	}
 
-	msg0 := msg
+	msg0 := withMsgCounter(msg, 500)
 	s.sut.loadControlWriteCB(&msg0)
 
-	msg1 := msg
-	msg1.RequestHeader.MsgCounter = util.Ptr(model.MsgCounterType(501))
+	msg1 := withMsgCounter(msg, 501)
 	msg1.Cmd = model.CmdType{
 		LoadControlLimitListData: &model.LoadControlLimitListDataType{
 			LoadControlLimitData: []model.LoadControlLimitDataType{},
@@ -57,8 +60,7 @@ func (s *CsLPCSuite) Test_loadControlWriteCB() {
 	s.sut.loadControlWriteCB(&msg1)
 	assert.False(s.T(), s.eventCalled)
 
-	msg2 := msg
-	msg2.RequestHeader.MsgCounter = util.Ptr(model.MsgCounterType(502))
+	msg2 := withMsgCounter(msg, 502)
 	msg2.Cmd = model.CmdType{
 		LoadControlLimitListData: &model.LoadControlLimitListDataType{
 			LoadControlLimitData: []model.LoadControlLimitDataType{
@@ -70,8 +72,7 @@ func (s *CsLPCSuite) Test_loadControlWriteCB() {
 	s.sut.loadControlWriteCB(&msg2)
 	assert.False(s.T(), s.eventCalled)
 
-	msg3 := msg
-	msg3.RequestHeader.MsgCounter = util.Ptr(model.MsgCounterType(503))
+	msg3 := withMsgCounter(msg, 503)
 	msg3.Cmd = model.CmdType{
 		LoadControlLimitListData: &model.LoadControlLimitListDataType{
 			LoadControlLimitData: []model.LoadControlLimitDataType{
@@ -88,8 +89,7 @@ func (s *CsLPCSuite) Test_loadControlWriteCB() {
 	s.sut.loadControlWriteCB(&msg3)
 	assert.True(s.T(), s.eventCalled)
 
-	msg4 := msg
-	msg4.RequestHeader.MsgCounter = util.Ptr(model.MsgCounterType(504))
+	msg4 := withMsgCounter(msg, 504)
 	msg4.Cmd = model.CmdType{
 		Filter: []model.FilterType{
 			{
