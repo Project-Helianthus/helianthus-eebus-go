@@ -14,15 +14,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/service"
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	"github.com/enbility/eebus-go/usecases/eg/lpc"
-	"github.com/enbility/eebus-go/usecases/eg/lpp"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/service"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/eg/lpc"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/eg/lpp"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 var remoteSki string

@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/enbility/eebus-go/api"
-	spineapi "github.com/enbility/spine-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 // Actor: Monitoring Appliance

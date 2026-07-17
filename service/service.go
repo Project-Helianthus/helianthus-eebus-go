@@ -1,22 +1,60 @@
 package service
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 
-	"github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	"github.com/enbility/ship-go/hub"
-	"github.com/enbility/ship-go/logging"
-	"github.com/enbility/ship-go/mdns"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	"github.com/Project-Helianthus/helianthus-ship-go/hub"
+	"github.com/Project-Helianthus/helianthus-ship-go/logging"
+	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
+
+// OutgoingAttemptBridgeConfiguration configures the optional attempt-aware SHIP bridge.
+type OutgoingAttemptBridgeConfiguration struct {
+	Gate shipapi.OutgoingAttemptGate
+	Sink shipapi.OutgoingAttemptHubReaderInterface
+}
+
+type connectionsHubFactory func(
+	shipapi.HubReaderInterface,
+	shipapi.MdnsInterface,
+	int,
+	tls.Certificate,
+	*shipapi.ServiceDetails,
+) shipapi.HubInterface
+
+type lifecycleState uint8
+
+const (
+	lifecycleUninitialized lifecycleState = iota
+	lifecycleSettingUp
+	lifecycleReady
+	lifecycleStarting
+	lifecycleRunning
+	lifecycleStopping
+	lifecycleStopped
+)
+
+func defaultConnectionsHubFactory(
+	reader shipapi.HubReaderInterface,
+	mdnsService shipapi.MdnsInterface,
+	port int,
+	certificate tls.Certificate,
+	localService *shipapi.ServiceDetails,
+) shipapi.HubInterface {
+	return hub.NewHub(reader, mdnsService, port, certificate, localService)
+}
 
 // A service is the central element of an EEBUS service
 // including its websocket server and a zeroconf service.
@@ -39,7 +77,14 @@ type Service struct {
 	// defines wether a user interaction to accept pairing is possible
 	isPairingPossible bool
 
-	startOnce sync.Once
+	bridgeEnabled       bool
+	outgoingAttemptGate shipapi.OutgoingAttemptGate
+	outgoingAttemptSink shipapi.OutgoingAttemptHubReaderInterface
+
+	connectionsHubFactory connectionsHubFactory
+
+	lifecycleMux sync.Mutex
+	lifecycle    lifecycleState
 
 	mux sync.Mutex
 }
@@ -47,15 +92,65 @@ type Service struct {
 // creates a new EEBUS service
 func NewService(configuration *api.Configuration, serviceHandler api.ServiceReaderInterface) *Service {
 	return &Service{
-		configuration:  configuration,
-		serviceHandler: serviceHandler,
+		configuration:         configuration,
+		serviceHandler:        serviceHandler,
+		connectionsHubFactory: defaultConnectionsHubFactory,
 	}
+}
+
+// NewServiceWithOutgoingAttemptBridge creates a service with attempt-aware SHIP callbacks.
+func NewServiceWithOutgoingAttemptBridge(
+	configuration *api.Configuration,
+	serviceHandler api.ServiceReaderInterface,
+	bridge OutgoingAttemptBridgeConfiguration,
+) *Service {
+	service := NewService(configuration, serviceHandler)
+	service.bridgeEnabled = true
+	service.outgoingAttemptGate = bridge.Gate
+	service.outgoingAttemptSink = bridge.Sink
+	return service
 }
 
 var _ api.ServiceInterface = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleSettingUp:
+		s.lifecycleMux.Unlock()
+		return errors.New("setup already in progress")
+	case lifecycleReady, lifecycleStarting, lifecycleRunning, lifecycleStopping, lifecycleStopped:
+		s.lifecycleMux.Unlock()
+		return nil
+	}
+	s.lifecycle = lifecycleSettingUp
+	s.lifecycleMux.Unlock()
+
+	setupSucceeded := false
+	defer func() {
+		if setupSucceeded {
+			return
+		}
+		s.lifecycleMux.Lock()
+		if s.lifecycle == lifecycleSettingUp {
+			s.lifecycle = lifecycleUninitialized
+		}
+		s.lifecycleMux.Unlock()
+	}()
+
+	if s.bridgeEnabled {
+		if isNilInterface(s.outgoingAttemptGate) {
+			return errors.New("missing outgoing attempt gate")
+		}
+		if isNilInterface(s.outgoingAttemptSink) {
+			return errors.New("missing outgoing attempt sink")
+		}
+	}
+	if s.connectionsHubFactory == nil {
+		return errors.New("missing connections hub factory")
+	}
+
 	sd := s.configuration
 
 	if len(sd.Certificate().Certificate) == 0 {
@@ -80,9 +175,9 @@ func (s *Service) Setup() error {
 	//   The originator's unique ID
 	// I assume those two to mean the same.
 	// TODO: clarify
-	s.localService = shipapi.NewServiceDetails(ski)
-	s.localService.SetShipID(sd.Identifier())
-	s.localService.SetDeviceType(string(sd.DeviceType()))
+	localService := shipapi.NewServiceDetails(ski)
+	localService.SetShipID(sd.Identifier())
+	localService.SetDeviceType(string(sd.DeviceType()))
 
 	logging.Log().Info("Local SKI:", ski)
 
@@ -109,7 +204,7 @@ func (s *Service) Setup() error {
 	}
 
 	// Create the local SPINE device
-	s.spineLocalDevice = spine.NewDeviceLocal(
+	spineLocalDevice := spine.NewDeviceLocal(
 		sd.DeviceBrand(),
 		sd.DeviceModel(),
 		sd.DeviceSerialNumber(),
@@ -121,15 +216,15 @@ func (s *Service) Setup() error {
 
 	// Create the device entities and add it to the SPINE device
 	for _, entityType := range sd.EntityTypes() {
-		entityAddressId := model.AddressEntityType(len(s.spineLocalDevice.Entities()))
+		entityAddressId := model.AddressEntityType(len(spineLocalDevice.Entities()))
 		entityAddress := []model.AddressEntityType{entityAddressId}
-		entity := spine.NewEntityLocal(s.spineLocalDevice, entityType, entityAddress, sd.HeartbeatTimeout())
-		s.spineLocalDevice.AddEntity(entity)
+		entity := spine.NewEntityLocal(spineLocalDevice, entityType, entityAddress, sd.HeartbeatTimeout())
+		spineLocalDevice.AddEntity(entity)
 	}
 
 	// setup mDNS
-	mdns := mdns.NewMDNS(
-		s.localService.SKI(),
+	mdnsService := mdns.NewMDNS(
+		localService.SKI(),
 		sd.DeviceBrand(),
 		sd.DeviceModel(),
 		string(sd.DeviceType()),
@@ -141,22 +236,89 @@ func (s *Service) Setup() error {
 	)
 
 	// Setup connections hub with mDNS and websocket connection handling
-	s.connectionsHub = hub.NewHub(s, mdns, s.configuration.Port(), s.configuration.Certificate(), s.localService)
+	connectionsHub := s.connectionsHubFactory(
+		s,
+		mdnsService,
+		s.configuration.Port(),
+		s.configuration.Certificate(),
+		localService,
+	)
+	if isNilInterface(connectionsHub) {
+		return errors.New("connections hub factory returned nil")
+	}
+	if s.bridgeEnabled {
+		setter, ok := connectionsHub.(shipapi.OutgoingAttemptGateSetter)
+		if !ok || isNilInterface(setter) {
+			return errors.New("connections hub does not support outgoing attempt gate installation")
+		}
+		if err := setter.SetOutgoingAttemptGate(s.outgoingAttemptGate); err != nil {
+			return fmt.Errorf("install outgoing attempt gate: %w", err)
+		}
+	}
+
+	s.lifecycleMux.Lock()
+	s.localService = localService
+	s.spineLocalDevice = spineLocalDevice
+	s.connectionsHub = connectionsHub
+	s.lifecycle = lifecycleReady
+	setupSucceeded = true
+	s.lifecycleMux.Unlock()
 
 	return nil
 }
 
 // Starts the service
 func (s *Service) Start() {
-	s.startOnce.Do(func() {
-		s.connectionsHub.Start()
-	})
+	s.lifecycleMux.Lock()
+	if s.lifecycle != lifecycleReady {
+		s.lifecycleMux.Unlock()
+		return
+	}
+	hub := s.connectionsHub
+	s.lifecycle = lifecycleStarting
+	s.lifecycleMux.Unlock()
+
+	hub.Start()
+
+	s.lifecycleMux.Lock()
+	if s.lifecycle == lifecycleStarting {
+		s.lifecycle = lifecycleRunning
+	}
+	s.lifecycleMux.Unlock()
 }
 
 // Shutdown all services and stop the server.
 func (s *Service) Shutdown() {
-	// Shut down all running connections
-	s.connectionsHub.Shutdown()
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleReady, lifecycleStarting, lifecycleRunning:
+		// Continue below after making the terminal transition visible.
+	default:
+		s.lifecycleMux.Unlock()
+		return
+	}
+	hub := s.connectionsHub
+	s.lifecycle = lifecycleStopping
+	s.lifecycleMux.Unlock()
+
+	hub.Shutdown()
+
+	s.lifecycleMux.Lock()
+	s.lifecycle = lifecycleStopped
+	s.lifecycleMux.Unlock()
+}
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 // add a use case to the service

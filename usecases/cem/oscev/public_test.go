@@ -1,9 +1,9 @@
 package oscev
 
 import (
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -1,10 +1,12 @@
 package service
 
 import (
-	shipapi "github.com/enbility/ship-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 var _ shipapi.HubReaderInterface = (*Service)(nil)
+var _ shipapi.OutgoingAttemptHubReaderInterface = (*Service)(nil)
 
 // report a connection to a SKI
 func (s *Service) RemoteSKIConnected(ski string) {
@@ -42,6 +44,28 @@ func (s *Service) ServiceShipIDUpdate(ski string, shipdID string) {
 // provide user information for the pairing/connection process
 func (s *Service) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
 	s.serviceHandler.ServicePairingDetailUpdate(ski, detail)
+}
+
+func (s *Service) OutgoingAttemptConnectionClosed(
+	ski string,
+	complete bool,
+	metadata shipapi.OutgoingAttemptMetadata,
+) {
+	if isNilInterface(s.outgoingAttemptSink) {
+		return
+	}
+	s.outgoingAttemptSink.OutgoingAttemptConnectionClosed(ski, complete, metadata)
+}
+
+func (s *Service) OutgoingAttemptHandshakeStateUpdate(
+	ski string,
+	state shipmodel.ShipState,
+	metadata shipapi.OutgoingAttemptMetadata,
+) {
+	if isNilInterface(s.outgoingAttemptSink) {
+		return
+	}
+	s.outgoingAttemptSink.OutgoingAttemptHandshakeStateUpdate(ski, state, metadata)
 }
 
 // return if the user is still able to trust the connection

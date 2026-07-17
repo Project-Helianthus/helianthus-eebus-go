@@ -3,11 +3,11 @@ package internal_test
 import (
 	"testing"
 
-	"github.com/enbility/eebus-go/features/internal"
-	shipmocks "github.com/enbility/ship-go/mocks"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/internal"
+	shipmocks "github.com/Project-Helianthus/helianthus-ship-go/mocks"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"

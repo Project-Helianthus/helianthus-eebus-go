@@ -1,8 +1,8 @@
 package internal
 
 import (
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/mocks"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/mocks"
 	"github.com/stretchr/testify/assert"
 )
 

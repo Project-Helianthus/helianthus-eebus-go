@@ -3,8 +3,8 @@ package api
 import (
 	"time"
 
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 // Actor: Controllable System

@@ -3,9 +3,9 @@ package usecase
 import (
 	"slices"
 
-	"github.com/enbility/eebus-go/usecases/internal"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/internal"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 // handle SPINE events

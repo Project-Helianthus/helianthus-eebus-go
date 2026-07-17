@@ -1,10 +1,10 @@
 package client
 
 import (
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/features/internal"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/internal"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 type IncentiveTable struct {

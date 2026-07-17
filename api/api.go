@@ -1,10 +1,10 @@
 package api
 
 import (
-	"github.com/enbility/ship-go/logging"
+	"github.com/Project-Helianthus/helianthus-ship-go/logging"
 
-	shipapi "github.com/enbility/ship-go/api"
-	spineapi "github.com/enbility/spine-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 //go:generate mockery

@@ -1,8 +1,8 @@
 package api
 
 import (
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 // details about each use case scenario

@@ -6,5 +6,5 @@ outpkg: "mocks"
 filename: "{{.InterfaceName}}.go"
 all: True
 packages:
-  github.com/enbility/eebus-go/api:
-  github.com/enbility/eebus-go/usecases/api:
+  github.com/Project-Helianthus/helianthus-eebus-go/api:
+  github.com/Project-Helianthus/helianthus-eebus-go/usecases/api:

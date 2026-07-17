@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/enbility/eebus-go/api"
-	shipmocks "github.com/enbility/ship-go/mocks"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	shipmocks "github.com/Project-Helianthus/helianthus-ship-go/mocks"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 	"github.com/stretchr/testify/mock"
 )
 

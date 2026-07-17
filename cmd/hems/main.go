@@ -13,17 +13,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/service"
-	ucapi "github.com/enbility/eebus-go/usecases/api"
-	cslpc "github.com/enbility/eebus-go/usecases/cs/lpc"
-	cslpp "github.com/enbility/eebus-go/usecases/cs/lpp"
-	eglpc "github.com/enbility/eebus-go/usecases/eg/lpc"
-	eglpp "github.com/enbility/eebus-go/usecases/eg/lpp"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/service"
+	ucapi "github.com/Project-Helianthus/helianthus-eebus-go/usecases/api"
+	cslpc "github.com/Project-Helianthus/helianthus-eebus-go/usecases/cs/lpc"
+	cslpp "github.com/Project-Helianthus/helianthus-eebus-go/usecases/cs/lpp"
+	eglpc "github.com/Project-Helianthus/helianthus-eebus-go/usecases/eg/lpc"
+	eglpp "github.com/Project-Helianthus/helianthus-eebus-go/usecases/eg/lpp"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 var remoteSki string

@@ -1,12 +1,12 @@
 # eebus-go
 
-[![Build Status](https://github.com/enbility/eebus-go/actions/workflows/default.yml/badge.svg?branch=main)](https://github.com/enbility/eebus-go/actions/workflows/default.yml/badge.svg?branch=main)
-[![GoDoc](https://img.shields.io/badge/godoc-reference-5272B4)](https://godoc.org/github.com/enbility/eebus-go)
+[![Build Status](https://github.com/Project-Helianthus/helianthus-eebus-go/actions/workflows/default.yml/badge.svg?branch=main)](https://github.com/Project-Helianthus/helianthus-eebus-go/actions/workflows/default.yml/badge.svg?branch=main)
+[![GoDoc](https://img.shields.io/badge/godoc-reference-5272B4)](https://godoc.org/github.com/Project-Helianthus/helianthus-eebus-go)
 [![Coverage Status](https://coveralls.io/repos/github/enbility/eebus-go/badge.svg?branch=main)](https://coveralls.io/github/enbility/eebus-go?branch=main)
-[![Go report](https://goreportcard.com/badge/github.com/enbility/eebus-go)](https://goreportcard.com/report/github.com/enbility/eebus-go)
+[![Go report](https://goreportcard.com/badge/github.com/Project-Helianthus/helianthus-eebus-go)](https://goreportcard.com/report/github.com/Project-Helianthus/helianthus-eebus-go)
 [![CodeFactor](https://www.codefactor.io/repository/github/enbility/eebus-go/badge)](https://www.codefactor.io/repository/github/enbility/eebus-go)
 
-This library provides a foundation for implementing [EEBUS](https://eebus.org) use cases in [go](https://golang.org). It uses the SHIP implementation [ship-go](https://github.com/enbility/ship-go) and the SPINE implementation [spine-go](https://github.com/enbility/spine-go). Both repositories started as part of this repository, before they were moved into their own separate repositories and go packages.
+This library provides a foundation for implementing [EEBUS](https://eebus.org) use cases in [go](https://golang.org). It uses the SHIP implementation [ship-go](https://github.com/Project-Helianthus/helianthus-ship-go) and the SPINE implementation [spine-go](https://github.com/Project-Helianthus/helianthus-spine-go). Both repositories started as part of this repository, before they were moved into their own separate repositories and go packages.
 
 Basic understanding of the EEBUS concepts SHIP and SPINE to use this library is required. Please check the corresponding specifications on the [EEBUS downloads website](https://www.eebus.org/media-downloads/).
 
@@ -14,8 +14,8 @@ Basic understanding of the EEBUS concepts SHIP and SPINE to use this library is 
 
 The supported functionality contains:
 
-- Support for SHIP 1.0.1 via [ship-go](https://github.com/enbility/ship-go)
-- Support for SPINE 1.3.0 via [spine-go](https://github.com/enbility/spine-go)
+- Support for SHIP 1.0.1 via [ship-go](https://github.com/Project-Helianthus/helianthus-ship-go)
+- Support for SPINE 1.3.0 via [spine-go](https://github.com/Project-Helianthus/helianthus-spine-go)
 - Certificate handling
 - mDNS Support, incl. avahi support
 - Connection (websocket) handling, including reconnection and double connections
@@ -105,7 +105,7 @@ This approach has been tested with:
 
 ### Verbose logging
 
-Use `SetLogger` on `Service` to set the logger which needs to conform to the `logging.Logging` interface of [ship-go](https://github.com/enbility/ship-go).
+Use `SetLogger` on `Service` to set the logger which needs to conform to the `logging.Logging` interface of [ship-go](https://github.com/Project-Helianthus/helianthus-ship-go).
 
 Example:
 

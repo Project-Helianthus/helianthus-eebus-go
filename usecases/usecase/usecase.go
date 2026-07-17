@@ -5,10 +5,10 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/enbility/eebus-go/api"
-	spineapi "github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/spine"
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
 
 type UseCaseBase struct {
