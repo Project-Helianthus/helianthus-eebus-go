@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	shiphub "github.com/Project-Helianthus/helianthus-ship-go/hub"
 	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
+	spinemocks "github.com/Project-Helianthus/helianthus-spine-go/mocks"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,14 +112,22 @@ var _ shipapi.OutgoingAttemptHubReaderInterface = (*Service)(nil)
 type hubRuntimeRecorder struct {
 	startCalls    int
 	shutdownCalls int
+	onStart       func()
+	onShutdown    func()
 }
 
 func (h *hubRuntimeRecorder) Start() {
 	h.startCalls++
+	if h.onStart != nil {
+		h.onStart()
+	}
 }
 
 func (h *hubRuntimeRecorder) Shutdown() {
 	h.shutdownCalls++
+	if h.onShutdown != nil {
+		h.onShutdown()
+	}
 }
 
 func (*hubRuntimeRecorder) ServiceForSKI(string) *shipapi.ServiceDetails {
@@ -426,6 +436,102 @@ func TestOutgoingAttemptBridgeSetupRetryIsDeterministicAndLifecycleIsIdempotent(
 	assert.Equal(t, 2, factoryCalls)
 }
 
+func TestServiceLifecycleShutdownBeforeStartIsTerminal(t *testing.T) {
+	sut := legacyNewServiceConstructor(newOutgoingAttemptTestConfiguration(t), &legacyServiceReaderRecorder{})
+	hub := &hubRuntimeRecorder{}
+	setTestConnectionsHubFactory(sut, func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	})
+
+	require.NoError(t, sut.Setup())
+	sut.Shutdown()
+	sut.Start()
+	require.NoError(t, sut.Setup(), "repeated setup must not revive a stopped service")
+	sut.Start()
+	sut.Shutdown()
+
+	assert.Zero(t, hub.startCalls)
+	assert.Equal(t, 1, hub.shutdownCalls)
+}
+
+func TestServiceLifecycleConcurrentStartShutdownIsBounded(t *testing.T) {
+	for iteration := 0; iteration < 100; iteration++ {
+		sut := legacyNewServiceConstructor(newOutgoingAttemptTestConfiguration(t), &legacyServiceReaderRecorder{})
+		hub := &hubRuntimeRecorder{}
+		setTestConnectionsHubFactory(sut, func(
+			shipapi.HubReaderInterface,
+			shipapi.MdnsInterface,
+			int,
+			tls.Certificate,
+			*shipapi.ServiceDetails,
+		) shipapi.HubInterface {
+			return hub
+		})
+		require.NoError(t, sut.Setup())
+
+		start := make(chan struct{})
+		var wait sync.WaitGroup
+		for call := 0; call < 32; call++ {
+			wait.Add(1)
+			go func(startCall bool) {
+				defer wait.Done()
+				<-start
+				if startCall {
+					sut.Start()
+					return
+				}
+				sut.Shutdown()
+			}(call%2 == 0)
+		}
+		close(start)
+		wait.Wait()
+		sut.Shutdown()
+		sut.Start()
+
+		assert.LessOrEqual(t, hub.startCalls, 1, "iteration %d", iteration)
+		assert.Equal(t, 1, hub.shutdownCalls, "iteration %d", iteration)
+	}
+}
+
+func TestServiceLifecycleReentrantHubCallbacksAreTerminalAndNonBlocking(t *testing.T) {
+	sut := legacyNewServiceConstructor(newOutgoingAttemptTestConfiguration(t), &legacyServiceReaderRecorder{})
+	hub := &hubRuntimeRecorder{}
+	hub.onStart = sut.Shutdown
+	hub.onShutdown = sut.Start
+	setTestConnectionsHubFactory(sut, func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	})
+	require.NoError(t, sut.Setup())
+
+	done := make(chan struct{})
+	go func() {
+		sut.Start()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("re-entrant Start/Shutdown callbacks deadlocked")
+	}
+	sut.Start()
+	sut.Shutdown()
+
+	assert.Equal(t, 1, hub.startCalls)
+	assert.Equal(t, 1, hub.shutdownCalls)
+}
+
 func TestOutgoingAttemptBridgeProductionHubReaderRouteForwardsExactCallbacks(t *testing.T) {
 	legacy := &legacyServiceReaderRecorder{}
 	sink := &outgoingAttemptSinkRecorder{}
@@ -479,6 +585,12 @@ func TestOutgoingAttemptBridgeProductionHubReaderRouteForwardsExactCallbacks(t *
 	assert.Zero(t, legacy.connectedCalls)
 	assert.Zero(t, legacy.disconnected)
 	assert.Zero(t, legacy.pairingCalls)
+
+	localDevice := spinemocks.NewDeviceLocalInterface(t)
+	localDevice.EXPECT().RemoveRemoteDeviceConnection("legacy-disconnect").Return().Once()
+	sut.spineLocalDevice = localDevice
+	productionReader.RemoteSKIDisconnected("legacy-disconnect")
+	assert.Equal(t, 1, legacy.disconnected, "the independent legacy path must still notify its handler")
 }
 
 func newOutgoingAttemptBridgeService(

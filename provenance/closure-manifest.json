@@ -27,6 +27,8 @@
         "path": "provenance/closure-manifest.json",
         "sha256": "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
       },
+      "ref": "refs/tags/v0.6.1-helianthus.1",
+      "repository": "https://github.com/Project-Helianthus/helianthus-ship-go.git",
       "tag_object_sha": "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7",
       "tree_sha": "1298a667e4d24c15027adf3775d99182cc174f24",
       "version": "v0.6.1-helianthus.1"
@@ -42,12 +44,14 @@
         "path": "provenance/closure-manifest.json",
         "sha256": "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"
       },
+      "ref": "refs/tags/v0.7.1-helianthus.1",
+      "repository": "https://github.com/Project-Helianthus/helianthus-spine-go.git",
       "tag_object_sha": "2722d31718aa89b1d31faf16b5c14bbee692e2de",
       "tree_sha": "02236304d8c74914a701be3896eaaf94be32e2d6",
       "version": "v0.7.1-helianthus.1"
     }
   ],
-  "schema": "helianthus.provenance.closure-manifest.v1",
+  "schema": "helianthus.provenance.closure-manifest.v2",
   "source_header_inventory": {
     "globs": [
       "**/*.go"
@@ -56,6 +60,7 @@
   },
   "upstream": {
     "peeled_commit_sha": "99f07ff79819b728dd2fe37472c4a26865d8076c",
+    "ref": "refs/tags/v0.7.0",
     "remote": "https://github.com/enbility/eebus-go.git",
     "tag": "v0.7.0",
     "tag_object_sha": "e4677eb9c46f1cc46c2559027c35fbf39766bcfb",

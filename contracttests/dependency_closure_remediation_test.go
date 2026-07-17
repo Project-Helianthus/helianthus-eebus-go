@@ -63,6 +63,61 @@ func TestDependencyClosureManifestSchemaFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDependencyClosureManifestBindingsRejectEveryArtifactAndObjectMutation(t *testing.T) {
+	verifier := closureVerifier(t)
+	mutatedSHA1 := strings.Repeat("0", 40)
+	cases := []closureCase{
+		{
+			name: "local license bytes", edit: setFixtureText("LICENSE", "mutated local license\n"),
+			wantPath: "LICENSE", wantClass: "local_license", wantReason: "artifact_digest_mismatch",
+		},
+		{
+			name: "downloaded dependency license", supportEdit: mutateFixtureModuleArtifact(canonicalEEBus, reviewedEEBus, "LICENSE", "mutated dependency license\n"),
+			wantPath: "provenance/closure-manifest.json", wantClass: "dependency_license", wantReason: "artifact_digest_mismatch",
+		},
+		{
+			name: "downloaded dependency provenance", supportEdit: mutateFixtureModuleArtifact(canonicalEEBus, reviewedEEBus, "provenance/closure-manifest.json", "{\"mutated\":true}\n"),
+			wantPath: "provenance/closure-manifest.json", wantClass: "dependency_provenance", wantReason: "artifact_digest_mismatch",
+		},
+		{
+			name: "upstream annotated tag", edit: mutateFixtureManifest(func(manifest map[string]any) {
+				manifestObject(manifest, "upstream")["tag_object_sha"] = mutatedSHA1
+			}),
+			wantPath: "provenance/closure-manifest.json", wantClass: "git_ref", wantReason: "tag_object_mismatch",
+		},
+		{
+			name: "fork annotated tag", edit: mutateFixtureManifest(func(manifest map[string]any) {
+				firstReviewedDependency(manifest)["tag_object_sha"] = mutatedSHA1
+			}),
+			wantPath: "provenance/closure-manifest.json", wantClass: "git_ref", wantReason: "tag_object_mismatch",
+		},
+		{
+			name: "peeled commit", edit: mutateFixtureManifest(func(manifest map[string]any) {
+				firstReviewedDependency(manifest)["peeled_commit_sha"] = mutatedSHA1
+			}),
+			wantPath: "provenance/closure-manifest.json", wantClass: "git_ref", wantReason: "peeled_commit_mismatch",
+		},
+		{
+			name: "commit tree", edit: mutateFixtureManifest(func(manifest map[string]any) {
+				firstReviewedDependency(manifest)["tree_sha"] = mutatedSHA1
+			}),
+			wantPath: "provenance/closure-manifest.json", wantClass: "git_ref", wantReason: "tree_mismatch",
+		},
+		{
+			name: "exact ref fetch failure", edit: mutateFixtureManifest(func(manifest map[string]any) {
+				firstReviewedDependency(manifest)["repository"] = ".artifact-repos/missing.git"
+			}),
+			wantPath: "provenance/closure-manifest.json", wantClass: "git_ref", wantReason: "git_ref_fetch_failed",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeClosureFixtureWithSupport(t, test.edit, test.supportEdit)
+			assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), test)
+		})
+	}
+}
+
 func TestDependencyClosureRejectsContentNotAtHead(t *testing.T) {
 	verifier := closureVerifier(t)
 	root := writeClosureFixture(t, nil)

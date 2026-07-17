@@ -14,13 +14,14 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from collections import deque
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-EVIDENCE_SCHEMA = "helianthus.dependency-closure-evidence.v2"
-MANIFEST_SCHEMA = "helianthus.provenance.closure-manifest.v1"
+EVIDENCE_SCHEMA = "helianthus.dependency-closure-evidence.v3"
+MANIFEST_SCHEMA = "helianthus.provenance.closure-manifest.v2"
 VERIFIER_PATH = "scripts/verify_dependency_closure.py"
 UPSTREAM_MODULES = tuple(
     "github.com/enbility/" + name for name in ("ship-go", "spine-go", "eebus-go")
@@ -47,6 +48,7 @@ CONTROL_HINT_RE = re.compile(
 PATH_TOKEN_RE = re.compile(
     r"\$?(?:\.\.?/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+"
 )
+BARE_FILE_RE = re.compile(r"(?<![A-Za-z0-9_./-])[A-Za-z0-9_-]+\.[A-Za-z0-9_.-]+")
 BUILD_CONFIG_RE = re.compile(
     r"(?:build|release).*\.(?:json|toml|yaml|yml)$", re.IGNORECASE
 )
@@ -55,6 +57,14 @@ CONTAINERFILE_RE = re.compile(r"^(?:Dockerfile|Containerfile)", re.IGNORECASE)
 CONFIG_NAMES = {
     ".mockery.yaml",
     ".mockery.yml",
+}
+FIXTURE_COMPONENTS = {
+    "fixture",
+    "fixtures",
+    "test-fixtures",
+    "testdata",
+    "test-data",
+    "testfixtures",
 }
 MANIFEST_KEYS = {
     "dependency_control_inputs",
@@ -156,6 +166,12 @@ def split_modes(data: bytes) -> dict[str, str]:
 def auto_class(path: str) -> str | None:
     parts = PurePosixPath(path).parts
     name = parts[-1]
+    if (
+        path.startswith("contracttests/")
+        or name.endswith("_test.go")
+        or any(part.lower() in FIXTURE_COMPONENTS for part in parts)
+    ):
+        return None
     if name == "go.mod":
         return "go_module"
     if name == "go.sum":
@@ -184,15 +200,16 @@ def auto_class(path: str) -> str | None:
         return "taskfile"
     if name.startswith(".goreleaser.") or BUILD_CONFIG_RE.search(name):
         return "build_release_config"
-    if path.startswith("contracttests/") or name.endswith("_test.go"):
-        return None
     if GO_SOURCE_RE.search(name):
         return "source_identity"
     return None
 
 
 def looks_unclassified_control(path: str) -> bool:
-    if path.startswith(("contracttests/", "provenance/")):
+    parts = PurePosixPath(path).parts
+    if path.startswith(("contracttests/", "provenance/")) or any(
+        part.lower() in FIXTURE_COMPONENTS for part in parts
+    ):
         return False
     return CONTROL_HINT_RE.search(PurePosixPath(path).name) is not None
 
@@ -235,6 +252,7 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
     upstream = value.get("upstream")
     if not isinstance(upstream, dict) or set(upstream) != {
         "peeled_commit_sha",
+        "ref",
         "remote",
         "tag",
         "tag_object_sha",
@@ -244,7 +262,12 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
     if not all(
         isinstance(upstream.get(field), str) and SHA40_RE.fullmatch(upstream[field])
         for field in ("peeled_commit_sha", "tag_object_sha", "tree_sha")
-    ) or not all(isinstance(upstream.get(field), str) for field in ("remote", "tag")):
+    ) or not all(
+        isinstance(upstream.get(field), str) and upstream[field]
+        for field in ("ref", "remote", "tag")
+    ):
+        return False, {}, []
+    if upstream["ref"] != "refs/tags/" + upstream["tag"]:
         return False, {}, []
 
     if not valid_digest_record(value.get("license"), with_path=True):
@@ -273,6 +296,8 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         "module",
         "peeled_commit_sha",
         "provenance_manifest",
+        "ref",
+        "repository",
         "tag_object_sha",
         "tree_sha",
         "version",
@@ -286,6 +311,9 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             module not in PROJECT_MODULES
             or not isinstance(version, str)
             or module in reviewed
+            or not isinstance(dependency.get("repository"), str)
+            or not dependency["repository"]
+            or dependency.get("ref") != "refs/tags/" + version
             or not all(
                 isinstance(dependency.get(field), str)
                 and SHA40_RE.fullmatch(dependency[field])
@@ -434,10 +462,18 @@ def extract_references(
         if yaml_is_malformed(text):
             add_violation(violations, path, input_class, "malformed_control_input")
             return [], []
-        literal_lines = "\n".join(
-            line for line in text.splitlines() if "{{" not in line and "}}" not in line
-        )
-        references.extend(PATH_TOKEN_RE.findall(literal_lines))
+        for line in text.splitlines():
+            templated = re.search(r"(?:\$\{\{|\{\{).*?\}\}", line) is not None
+            static_line = re.sub(r"(?:\$\{\{|\{\{).*?\}\}", "", line)
+            line_references = PATH_TOKEN_RE.findall(static_line)
+            line_references.extend(BARE_FILE_RE.findall(static_line))
+            for reference in line_references:
+                if templated:
+                    reference = reference.lstrip("/")
+                    while reference.startswith("../"):
+                        reference = reference[3:]
+                if reference:
+                    references.append(reference)
         selections.extend(yaml_selections(text))
     elif suffix == ".py":
         try:
@@ -464,6 +500,7 @@ def extract_references(
                 return [], []
     else:
         references.extend(PATH_TOKEN_RE.findall(text))
+        references.extend(BARE_FILE_RE.findall(text))
     return references, selections
 
 
@@ -480,11 +517,6 @@ def normalize_reference(
         or re.fullmatch(r"v?\d+(?:\.\d+)+(?:[-+].*)?", value)
     ):
         return [], None
-    first_component = value.removeprefix("./").split("/", 1)[0]
-    if not value.startswith(("./", "../")) and "." in first_component:
-        return [], None
-    if re.fullmatch(r"[A-Z][A-Z0-9_]*", first_component):
-        return [], None
     if value.startswith("/"):
         return [], "reference_outside_repo"
 
@@ -498,19 +530,27 @@ def normalize_reference(
             PurePosixPath(value),
             PurePosixPath(referring_path).parent / value,
         ]
+    resolved_paths: set[str] = set()
     for candidate in candidates:
         normalized = posixpath.normpath(candidate.as_posix()).removeprefix("./")
         if normalized == ".." or normalized.startswith("../"):
             return [], "reference_outside_repo"
         if normalized in tracked:
-            return [normalized], None
+            resolved_paths.add(normalized)
         prefix = normalized.rstrip("/") + "/"
-        descendants = sorted(path for path in tracked if path.startswith(prefix))
-        if descendants:
-            return descendants, None
+        resolved_paths.update(path for path in tracked if path.startswith(prefix))
+
+    if resolved_paths:
+        return sorted(resolved_paths), None
+
+    first_component = value.removeprefix("./").split("/", 1)[0]
+    if not value.startswith(("./", "../")) and "." in first_component and "/" in value:
+        return [], None
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", first_component):
+        return [], None
 
     looks_like_file = PurePosixPath(value).suffix != ""
-    if explicit or looks_like_file and not value.startswith(("go", "python", "bash")):
+    if explicit or looks_like_file and "/" in value and not value.startswith(("go", "python", "bash")):
         return [], "referenced_input_untracked"
     return [], None
 
@@ -548,6 +588,208 @@ def scan_module_versions(
             )
 
 
+def read_module_artifact(module_dir: str, path: str) -> bytes | None:
+    normalized = normalize_repo_path(path)
+    if normalized is None:
+        return None
+    try:
+        root = Path(module_dir).resolve(strict=True)
+        candidate = (root / PurePosixPath(normalized)).resolve(strict=True)
+        candidate.relative_to(root)
+        if candidate.is_symlink() or not candidate.is_file():
+            return None
+        return candidate.read_bytes()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def download_module(repo: Path, module: str, version: str) -> dict[str, Any] | None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="helianthus-closure-go-") as temporary:
+            temporary_path = Path(temporary)
+            (temporary_path / "go.mod").write_text(
+                "module helianthus.local/dependency-verifier\n\ngo 1.22.0\n",
+                encoding="utf-8",
+            )
+            output = run_command(
+                temporary_path,
+                ["go", "mod", "download", "-json", module + "@" + version],
+            )
+        downloaded = json.loads(output.decode("utf-8"))
+    except (CommandFailure, UnicodeError, json.JSONDecodeError, OSError):
+        return None
+    return downloaded if isinstance(downloaded, dict) else None
+
+
+def go_sum_entries(data: bytes) -> dict[tuple[str, str], str]:
+    entries: dict[tuple[str, str], str] = {}
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeError:
+        return entries
+    for line in lines:
+        fields = line.split()
+        if len(fields) == 3:
+            entries[(fields[0], fields[1])] = fields[2]
+    return entries
+
+
+def verify_git_ref(
+    repo: Path,
+    repository: str,
+    ref: str,
+    expected: dict[str, str],
+    violation_path: str,
+    violations: set[tuple[str, str, str]],
+) -> dict[str, str] | None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="helianthus-closure-git-") as temporary:
+            git_dir = str(Path(temporary) / "objects.git")
+            run_command(repo, ["git", "init", "--bare", "--quiet", git_dir])
+            run_command(
+                repo,
+                [
+                    "git",
+                    "--git-dir",
+                    git_dir,
+                    "fetch",
+                    "--quiet",
+                    "--depth=1",
+                    "--no-tags",
+                    repository,
+                    "+" + ref + ":refs/verify/source",
+                ],
+            )
+            object_type = run_command(
+                repo, ["git", "--git-dir", git_dir, "cat-file", "-t", "refs/verify/source"]
+            ).decode("ascii").strip()
+            actual = {
+                "tag_object_sha": run_command(
+                    repo, ["git", "--git-dir", git_dir, "rev-parse", "refs/verify/source"]
+                ).decode("ascii").strip(),
+                "peeled_commit_sha": run_command(
+                    repo, ["git", "--git-dir", git_dir, "rev-parse", "refs/verify/source^{commit}"]
+                ).decode("ascii").strip(),
+                "tree_sha": run_command(
+                    repo, ["git", "--git-dir", git_dir, "rev-parse", "refs/verify/source^{tree}"]
+                ).decode("ascii").strip(),
+            }
+    except (CommandFailure, UnicodeError, OSError):
+        add_violation(violations, violation_path, "git_ref", "git_ref_fetch_failed")
+        return None
+
+    if object_type != "tag":
+        add_violation(violations, violation_path, "git_ref", "tag_object_type_mismatch")
+    for field, reason in (
+        ("tag_object_sha", "tag_object_mismatch"),
+        ("peeled_commit_sha", "peeled_commit_mismatch"),
+        ("tree_sha", "tree_mismatch"),
+    ):
+        if actual[field] != expected[field]:
+            add_violation(violations, violation_path, "git_ref", reason)
+    return {
+        "peeled_commit_sha": actual["peeled_commit_sha"],
+        "ref": ref,
+        "repository": repository,
+        "tag_object_sha": actual["tag_object_sha"],
+        "tree_sha": actual["tree_sha"],
+    }
+
+
+def verify_manifest_bindings(
+    repo: Path,
+    manifest_path: str,
+    manifest: dict[str, Any],
+    tracked: set[str],
+    modes: dict[str, str],
+    violations: set[tuple[str, str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    artifacts: list[dict[str, str]] = []
+    git_refs: list[dict[str, str]] = []
+    sums_data = safe_read(repo, "go.sum", modes, violations, "go_checksum") or b""
+    sums = go_sum_entries(sums_data)
+
+    license_record = manifest["license"]
+    license_path = license_record["path"]
+    if license_path not in tracked:
+        add_violation(violations, license_path, "local_license", "artifact_untracked")
+    local_license = safe_read(repo, license_path, modes, violations, "local_license")
+    if local_license is not None:
+        digest = sha256(local_license)
+        artifacts.append({"class": "local_license", "path": license_path, "sha256": digest})
+        if digest != license_record["sha256"]:
+            add_violation(violations, license_path, "local_license", "artifact_digest_mismatch")
+
+    upstream = manifest["upstream"]
+    upstream_ref = verify_git_ref(
+        repo,
+        upstream["remote"],
+        upstream["ref"],
+        upstream,
+        manifest_path,
+        violations,
+    )
+    if upstream_ref is not None:
+        git_refs.append(upstream_ref)
+
+    for dependency in manifest["reviewed_dependencies"]:
+        module = dependency["module"]
+        version = dependency["version"]
+        artifact_root = module + "@" + version + "/"
+        downloaded = download_module(repo, module, version)
+        if downloaded is None:
+            add_violation(violations, manifest_path, "dependency_module", "module_download_failed")
+
+        if (
+            not isinstance(downloaded, dict)
+            or downloaded.get("Path") != module
+            or downloaded.get("Version") != version
+            or not isinstance(downloaded.get("Dir"), str)
+        ):
+            if downloaded is not None:
+                add_violation(violations, manifest_path, "dependency_module", "module_identity_mismatch")
+        else:
+            if (
+                sums.get((module, version)) != downloaded.get("Sum")
+                or sums.get((module, version + "/go.mod")) != downloaded.get("GoModSum")
+            ):
+                add_violation(violations, manifest_path, "dependency_module", "module_checksum_mismatch")
+            for input_class, field in (
+                ("dependency_license", "license"),
+                ("dependency_provenance", "provenance_manifest"),
+            ):
+                record = dependency[field]
+                data = read_module_artifact(downloaded["Dir"], record["path"])
+                if data is None:
+                    add_violation(violations, manifest_path, input_class, "artifact_unreadable")
+                    continue
+                digest = sha256(data)
+                artifacts.append(
+                    {
+                        "class": input_class,
+                        "path": artifact_root + record["path"],
+                        "sha256": digest,
+                    }
+                )
+                if digest != record["sha256"]:
+                    add_violation(violations, manifest_path, input_class, "artifact_digest_mismatch")
+
+        dependency_ref = verify_git_ref(
+            repo,
+            dependency["repository"],
+            dependency["ref"],
+            dependency,
+            manifest_path,
+            violations,
+        )
+        if dependency_ref is not None:
+            git_refs.append(dependency_ref)
+
+    return sorted(artifacts, key=lambda item: (item["class"], item["path"])), sorted(
+        git_refs, key=lambda item: (item["repository"], item["ref"])
+    )
+
+
 def evidence_bytes(
     result: str,
     source_sha: str,
@@ -556,11 +798,15 @@ def evidence_bytes(
     manifest_data: bytes,
     verifier_data: bytes,
     inputs: dict[str, tuple[str, str]],
+    artifacts: list[dict[str, str]],
+    git_refs: list[dict[str, str]],
     violations: set[tuple[str, str, str]],
     git_version: str,
+    go_version: str,
 ) -> bytes:
     digest = lambda data: {"sha256": sha256(data), "source_sha": source_sha}
     evidence = {
+        "artifacts": [dict(artifact, source_sha=source_sha) for artifact in artifacts],
         "commands": [
             {
                 "argv": ["git", "ls-files", "-z"],
@@ -583,6 +829,16 @@ def evidence_bytes(
                 "tool_version": git_version,
             },
             {
+                "argv": ["go", "mod", "download", "-json", "MODULE@VERSION"],
+                "name": "dependency_module_artifacts",
+                "tool_version": go_version,
+            },
+            {
+                "argv": ["git", "fetch", "--depth=1", "--no-tags", "REPOSITORY", "REF"],
+                "name": "annotated_tag_identity",
+                "tool_version": git_version,
+            },
+            {
                 "argv": [
                     "python3",
                     VERIFIER_PATH,
@@ -599,6 +855,7 @@ def evidence_bytes(
                 "tool_version": platform.python_version(),
             },
         ],
+        "git_refs": [dict(reference, source_sha=source_sha) for reference in git_refs],
         "inputs": [
             {
                 "class": input_class,
@@ -632,11 +889,16 @@ def verify(args: argparse.Namespace) -> int:
     mode_data = b""
     source_sha = ""
     git_version = "unavailable"
+    go_version = "unavailable"
 
     try:
         git_version = run_command(repo, ["git", "--version"]).decode("ascii").strip()
     except (CommandFailure, UnicodeError):
         add_violation(violations, "git", "repository", "git_unavailable")
+    try:
+        go_version = run_command(repo, ["go", "version"]).decode("ascii").strip()
+    except (CommandFailure, UnicodeError):
+        pass
     try:
         inventory = run_command(repo, ["git", "ls-files", "-z"])
     except CommandFailure:
@@ -679,6 +941,8 @@ def verify(args: argparse.Namespace) -> int:
     manifest_value: Any = None
     reviewed: dict[str, str] = {}
     declared: list[str] = []
+    artifacts: list[dict[str, str]] = []
+    git_refs: list[dict[str, str]] = []
     if manifest_path not in tracked:
         add_violation(violations, manifest_path, "provenance", "invalid_manifest")
     else:
@@ -690,6 +954,10 @@ def verify(args: argparse.Namespace) -> int:
         valid, reviewed, declared = validate_manifest(manifest_value)
         if not valid:
             add_violation(violations, manifest_path, "provenance", "invalid_manifest_schema")
+        else:
+            artifacts, git_refs = verify_manifest_bindings(
+                repo, manifest_path, manifest_value, tracked, modes, violations
+            )
 
     inputs: dict[str, str] = {}
     for path in paths:
@@ -767,8 +1035,11 @@ def verify(args: argparse.Namespace) -> int:
         manifest_data,
         verifier_data,
         scanned,
+        artifacts,
+        git_refs,
         violations,
         git_version,
+        go_version,
     )
     write_bytes(Path(args.evidence_output), evidence)
     if violations:

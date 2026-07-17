@@ -29,7 +29,7 @@ const (
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "e10d3e5b34e6e472a78a624a41a9897137f43e1ae3114c7dc1c725fcd8f78aa7"
+	productionHash    = "be4efd95b0b80ce0e97cec9b1a90250954b37516837a09238bf3a72718035a30"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -134,6 +134,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		} `json:"fork"`
 		Upstream struct {
 			Remote    string `json:"remote"`
+			Ref       string `json:"ref"`
 			Tag       string `json:"tag"`
 			TagObject string `json:"tag_object_sha"`
 			Commit    string `json:"peeled_commit_sha"`
@@ -149,12 +150,14 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			Headers []string `json:"headers"`
 		} `json:"source_header_inventory"`
 		ReviewedDependencies []struct {
-			Module  string `json:"module"`
-			Version string `json:"version"`
-			Tag     string `json:"tag_object_sha"`
-			Commit  string `json:"peeled_commit_sha"`
-			Tree    string `json:"tree_sha"`
-			License struct {
+			Module     string `json:"module"`
+			Version    string `json:"version"`
+			Repository string `json:"repository"`
+			Ref        string `json:"ref"`
+			Tag        string `json:"tag_object_sha"`
+			Commit     string `json:"peeled_commit_sha"`
+			Tree       string `json:"tree_sha"`
+			License    struct {
 				Path   string `json:"path"`
 				SHA256 string `json:"sha256"`
 			} `json:"license"`
@@ -170,12 +173,13 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	wants := []struct{ name, got, want string }{
-		{"schema", manifest.Schema, "helianthus.provenance.closure-manifest.v1"},
+		{"schema", manifest.Schema, "helianthus.provenance.closure-manifest.v2"},
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-eebus-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
 		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.0-helianthus.1"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/eebus-go.git"},
+		{"upstream.ref", manifest.Upstream.Ref, "refs/tags/v0.7.0"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "e4677eb9c46f1cc46c2559027c35fbf39766bcfb"},
 		{"upstream.peeled_commit_sha", manifest.Upstream.Commit, "99f07ff79819b728dd2fe37472c4a26865d8076c"},
@@ -201,12 +205,14 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"spine", canonicalSpine, canonicalSpineVer, "2722d31718aa89b1d31faf16b5c14bbee692e2de", "c85a449cc44c7e1fd2a44f8b10724d81e89bb260", "02236304d8c74914a701be3896eaaf94be32e2d6", "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"},
 	} {
 		var reviewed *struct {
-			Module  string `json:"module"`
-			Version string `json:"version"`
-			Tag     string `json:"tag_object_sha"`
-			Commit  string `json:"peeled_commit_sha"`
-			Tree    string `json:"tree_sha"`
-			License struct {
+			Module     string `json:"module"`
+			Version    string `json:"version"`
+			Repository string `json:"repository"`
+			Ref        string `json:"ref"`
+			Tag        string `json:"tag_object_sha"`
+			Commit     string `json:"peeled_commit_sha"`
+			Tree       string `json:"tree_sha"`
+			License    struct {
 				Path   string `json:"path"`
 				SHA256 string `json:"sha256"`
 			} `json:"license"`
@@ -226,6 +232,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		}
 		dependencyWants := []struct{ name, got, want string }{
 			{"module", reviewed.Module, dependency.module}, {"version", reviewed.Version, dependency.version},
+			{"repository", reviewed.Repository, "https://github.com/Project-Helianthus/helianthus-" + dependency.name + "-go.git"},
+			{"ref", reviewed.Ref, "refs/tags/" + dependency.version},
 			{"tag_object_sha", reviewed.Tag, dependency.tag}, {"peeled_commit_sha", reviewed.Commit, dependency.commit},
 			{"tree_sha", reviewed.Tree, dependency.tree}, {"license.path", reviewed.License.Path, "LICENSE"},
 			{"license.sha256", reviewed.License.SHA256, "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"},
@@ -259,18 +267,25 @@ func TestCommittedClosureVerifierIsExecutable(t *testing.T) {
 func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 	path := filepath.Join(repositoryRoot(t), ".github", "workflows", "default.yml")
 	workflow := string(readFile(t, path))
-	branch, permissions := workflowContract(workflow)
+	branch, topLevelPermissions := workflowContract(workflow)
 	if !branch {
 		t.Error("workflow push branches do not include helianthus-v0.7")
 	}
-	want := map[string]string{"contents": "read", "security-events": "write"}
-	if len(permissions) != len(want) {
-		t.Errorf("top-level workflow permissions = %v; want only %v", permissions, want)
+	if len(topLevelPermissions) != 0 {
+		t.Errorf("top-level workflow permissions = %v; permissions must be isolated per job", topLevelPermissions)
 	}
-	for name, value := range want {
-		if permissions[name] != value {
-			t.Errorf("workflow permission %s = %q; want %q", name, permissions[name], value)
-		}
+	build := workflowJobSection(t, workflow, "build")
+	security := workflowJobSection(t, workflow, "security")
+	assertExactPermissions(t, "build", workflowJobPermissions(build), map[string]string{"contents": "read"})
+	assertExactPermissions(t, "security", workflowJobPermissions(security), map[string]string{"contents": "read", "security-events": "write"})
+	if strings.Contains(build, "security-events:") || strings.Contains(build, "Upload SARIF file") {
+		t.Error("build job must not receive or use SARIF write authority")
+	}
+	if !strings.Contains(security, "Upload SARIF file") || strings.Contains(security, "coverallsapp/github-action@") {
+		t.Error("security job must exclusively own SARIF upload and must not run Coveralls")
+	}
+	if strings.Count(workflow, "persist-credentials: false") != 2 {
+		t.Error("every checkout must disable persisted credentials")
 	}
 	required := []string{
 		"scripts/verify_dependency_closure.py",
@@ -299,7 +314,7 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 		t.Error("workflow runs resolved graph commands before tracked closure verifier")
 	}
 	mutableRef := "@" + "m" + "aster"
-	if strings.Contains(workflow, "--issues-exit-code=0") || strings.Contains(workflow, "version: latest") || strings.Contains(workflow, mutableRef) {
+	if strings.Contains(workflow, "--issues-exit-code=0") || strings.Contains(workflow, "-no-fail") || strings.Contains(workflow, "version: latest") || strings.Contains(workflow, mutableRef) {
 		t.Error("workflow retains a lint bypass or mutable golangci selection")
 	}
 	coverageStart := strings.Index(workflow, "- name: Send coverage")
@@ -311,9 +326,17 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 	if !strings.Contains(workflow, "- name: Retain coverage artifact") {
 		t.Error("workflow must retain local coverage as an authoritative artifact before external reporting")
 	}
+	for _, fragment := range []string{"id: gosec", "continue-on-error: true", "if: always()", "steps.gosec.outcome", "Enforce Gosec outcome"} {
+		if !strings.Contains(security, fragment) {
+			t.Errorf("security job does not preserve SARIF and enforce the original gosec outcome: missing %q", fragment)
+		}
+	}
+	if strings.Count(build, "continue-on-error: true") != 1 || !strings.Contains(build, "- name: Send coverage") {
+		t.Error("Coveralls must be the build job's only advisory step")
+	}
 	uses := regexp.MustCompile(`(?m)^\s*uses:\s+[^\s]+@([0-9a-f]{40})\s+#\s+v\S+\s*$`).FindAllStringSubmatch(workflow, -1)
-	if len(uses) != 8 {
-		t.Errorf("workflow immutable action pins = %d; want 8 full commit pins with tag comments", len(uses))
+	if len(uses) != 10 {
+		t.Errorf("workflow immutable action pins = %d; want 10 full commit pins with tag comments", len(uses))
 	}
 }
 func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
@@ -425,6 +448,64 @@ func workflowContract(data string) (bool, map[string]string) {
 		}
 	}
 	return branch, permissions
+}
+
+func workflowJobSection(t *testing.T, data, name string) string {
+	t.Helper()
+	lines := strings.Split(data, "\n")
+	start := -1
+	for index, line := range lines {
+		if line == "  "+name+":" {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("workflow job %s is absent", name)
+	}
+	end := len(lines)
+	for index := start + 1; index < len(lines); index++ {
+		line := lines[index]
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasSuffix(strings.TrimSpace(line), ":") {
+			end = index
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+func workflowJobPermissions(section string) map[string]string {
+	permissions := make(map[string]string)
+	inPermissions := false
+	for _, raw := range strings.Split(section, "\n") {
+		trimmed := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
+		indent := len(raw) - len(strings.TrimLeft(raw, " "))
+		if indent == 4 {
+			inPermissions = trimmed == "permissions:"
+			continue
+		}
+		if !inPermissions || indent != 6 {
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) == 2 {
+			permissions[parts[0]] = strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		}
+	}
+	return permissions
+}
+
+func assertExactPermissions(t *testing.T, job string, got, want map[string]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("%s job permissions = %v; want only %v", job, got, want)
+		return
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("%s job permission %s = %q; want %q", job, name, got[name], value)
+		}
+	}
 }
 
 func normalizeCanonicalImports(t *testing.T, path string, src []byte) []byte {

@@ -1,10 +1,12 @@
 package contracttests
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +45,18 @@ type closureCase struct {
 	wantReason    string
 	secret        string
 	deterministic bool
+	supportEdit   func(*testing.T, string)
+}
+
+type fixtureIdentity struct {
+	module, version, repository, ref string
+	licenseDigest, manifestDigest    string
+	tag, commit, tree                string
+}
+
+type closureProvenanceFixture struct {
+	upstream     fixtureIdentity
+	dependencies []fixtureIdentity
 }
 
 func TestDependencyClosureVerifierFixtures(t *testing.T) {
@@ -101,7 +115,7 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 	}
 	for _, item := range hidden {
 		edit := setFixtureText(item.path, item.data)
-		if _, exists := baseClosureFixture()[item.path]; exists && item.path != "release/release.json" && item.path != "release/nested.json" {
+		if baseClosureContains(item.path) && item.path != "release/release.json" && item.path != "release/nested.json" {
 			edit = appendFixtureText(item.path, item.data)
 		}
 		cases = append(cases, closureCase{
@@ -211,6 +225,39 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 			wantPath: "assets/module.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
 		},
 		closureCase{
+			name: "templated workflow static reference", edit: func(files map[string]closureFixtureFile) {
+				files[".github/workflows/release.yml"] = closureFixtureFile{data: "name: Release\ninput: ${{ github.workspace }}/hidden/dependency.json\n"}
+				files["hidden/dependency.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: "hidden/dependency.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "bare sibling reference", edit: func(files map[string]closureFixtureFile) {
+				files[".github/workflows/release.yml"] = closureFixtureFile{data: "name: Release\ninput: hidden.json\n"}
+				files[".github/workflows/hidden.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: ".github/workflows/hidden.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "duplicate root and sibling references are both scanned", edit: func(files map[string]closureFixtureFile) {
+				files[".github/workflows/release.yml"] = closureFixtureFile{data: "name: Release\ninput: duplicate.json\n"}
+				files["duplicate.json"] = closureFixtureFile{data: "{}\n"}
+				files[".github/workflows/duplicate.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: ".github/workflows/duplicate.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "unreferenced fixture control is excluded", wantPass: true,
+			edit: setFixtureText("testdata/go.mod", "module example.com/fixture\n\nrequire "+upstreamShip+" v0.6.0\n"),
+		},
+		closureCase{
+			name: "production reference reaches fixture control", edit: func(files map[string]closureFixtureFile) {
+				files[".github/workflows/release.yml"] = closureFixtureFile{data: "name: Release\ninput: testdata/go.mod\n"}
+				files["testdata/go.mod"] = closureFixtureFile{data: "module example.com/fixture\n\nrequire " + upstreamShip + " v0.6.0\n"}
+			},
+			wantPath: "testdata/go.mod", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
 			name: "untracked local reference", edit: setFixtureText("release/release.json", `{"release_inputs":["assets/missing.json"]}`+"\n"),
 			wantPath: "release/release.json", wantClass: "release_config", wantReason: "referenced_input_untracked",
 		},
@@ -236,7 +283,7 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			root := writeClosureFixture(t, test.edit)
+			root := writeClosureFixtureWithSupport(t, test.edit, test.supportEdit)
 			result := runFixtureVerifier(t, verifier, root)
 			assertFixtureResult(t, root, result, test)
 			if test.deterministic {
@@ -250,7 +297,58 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 	}
 }
 
-func baseClosureFixture() map[string]closureFixtureFile {
+func baseClosureContains(path string) bool {
+	switch path {
+	case ".github/actions/release/action.yml", ".github/workflows/release.yml", "go.mod", "go.sum", "main.go", "LICENSE", "release/nested.json", "release/release.json", "scripts/release.sh", "vendor/modules.txt":
+		return true
+	default:
+		return false
+	}
+}
+
+func baseClosureFixture(provenance closureProvenanceFixture) map[string]closureFixtureFile {
+	reviewed := make([]map[string]any, 0, len(provenance.dependencies))
+	for _, dependency := range provenance.dependencies {
+		reviewed = append(reviewed, map[string]any{
+			"license":             map[string]string{"path": "LICENSE", "sha256": dependency.licenseDigest},
+			"module":              dependency.module,
+			"peeled_commit_sha":   dependency.commit,
+			"provenance_manifest": map[string]string{"path": "provenance/closure-manifest.json", "sha256": dependency.manifestDigest},
+			"ref":                 dependency.ref,
+			"repository":          dependency.repository,
+			"tag_object_sha":      dependency.tag,
+			"tree_sha":            dependency.tree,
+			"version":             dependency.version,
+		})
+	}
+	manifest := map[string]any{
+		"dependency_control_inputs": []string{".github/actions/release/action.yml", ".github/workflows/release.yml", "scripts/release.sh", "release/release.json"},
+		"fork": map[string]string{
+			"intended_prerelease": "v0.0.1-helianthus.1",
+			"lifecycle":           "temporary_downstream_patch_carrier",
+			"origin":              "https://github.com/Project-Helianthus/dependency-closure-fixture.git",
+		},
+		"license":                 map[string]string{"path": "LICENSE", "sha256": fmt.Sprintf("%x", sha256.Sum256([]byte("fixture license\n")))},
+		"module":                  "github.com/Project-Helianthus/dependency-closure-fixture",
+		"notice_inventory":        []string{},
+		"reviewed_dependencies":   reviewed,
+		"schema":                  "helianthus.provenance.closure-manifest.v2",
+		"source_header_inventory": map[string]any{"globs": []string{"**/*.go"}, "headers": []string{}},
+		"upstream": map[string]string{
+			"peeled_commit_sha": provenance.upstream.commit,
+			"ref":               provenance.upstream.ref,
+			"remote":            provenance.upstream.repository,
+			"tag":               provenance.upstream.version,
+			"tag_object_sha":    provenance.upstream.tag,
+			"tree_sha":          provenance.upstream.tree,
+		},
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	manifestData = append(manifestData, '\n')
+
 	return map[string]closureFixtureFile{
 		".github/actions/release/action.yml": {data: "name: Release\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: scripts/release.sh release/release.json\n"},
 		".github/workflows/release.yml":      {data: "name: Release\njobs:\n  release:\n    steps:\n      - uses: ./.github/actions/release\n"},
@@ -265,71 +363,14 @@ require (
 	example.com/unrelated v0.0.0-20260716000000-0123456789ab
 )
 `},
-		"go.sum":  {data: "github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1/go.mod h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"},
-		"main.go": {data: "package fixture\n\nimport _ \"github.com/Project-Helianthus/helianthus-ship-go/api\"\n"},
-		"provenance/closure-manifest.json": {data: `{
-  "dependency_control_inputs": [
-    ".github/actions/release/action.yml",
-    ".github/workflows/release.yml",
-    "scripts/release.sh",
-    "release/release.json"
-  ],
-  "fork": {
-    "intended_prerelease": "v0.0.1-helianthus.1",
-    "lifecycle": "temporary_downstream_patch_carrier",
-    "origin": "https://github.com/Project-Helianthus/dependency-closure-fixture.git"
-  },
-  "license": {
-    "path": "LICENSE",
-    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  },
-  "module": "github.com/Project-Helianthus/dependency-closure-fixture",
-  "notice_inventory": [],
-  "reviewed_dependencies": [
-    {
-      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-      "module": "github.com/Project-Helianthus/helianthus-eebus-go",
-      "peeled_commit_sha": "1111111111111111111111111111111111111111",
-      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-      "tag_object_sha": "2222222222222222222222222222222222222222",
-      "tree_sha": "3333333333333333333333333333333333333333",
-	      "version": "v0.7.0-helianthus.1"
-    },
-    {
-      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-      "module": "github.com/Project-Helianthus/helianthus-ship-go",
-      "peeled_commit_sha": "4444444444444444444444444444444444444444",
-      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-      "tag_object_sha": "5555555555555555555555555555555555555555",
-      "tree_sha": "6666666666666666666666666666666666666666",
-      "version": "v0.6.1-helianthus.1"
-    },
-    {
-      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-      "module": "github.com/Project-Helianthus/helianthus-spine-go",
-      "peeled_commit_sha": "7777777777777777777777777777777777777777",
-      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-      "tag_object_sha": "8888888888888888888888888888888888888888",
-      "tree_sha": "9999999999999999999999999999999999999999",
-      "version": "v0.7.1-helianthus.1"
-    }
-  ],
-  "schema": "helianthus.provenance.closure-manifest.v1",
-  "source_header_inventory": {"globs": ["**/*.go"], "headers": []},
-  "upstream": {
-    "peeled_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "remote": "https://example.invalid/upstream.git",
-    "tag": "v0.0.0",
-    "tag_object_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
-  }
-}
-`},
-		"LICENSE":              {data: "fixture license\n"},
-		"release/nested.json":  {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.1"}` + "\n"},
-		"release/release.json": {data: `{"release_inputs":["release/nested.json"]}` + "\n"},
-		"scripts/release.sh":   {data: "#!/bin/sh\nset -eu\ntest -f \"${1:?release config required}\"\n", executable: true},
-		"vendor/modules.txt":   {data: "# github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1\n## explicit; go 1.22\ngithub.com/Project-Helianthus/helianthus-ship-go/api\n"},
+		"go.sum":                           {},
+		"main.go":                          {data: "package fixture\n\nimport _ \"github.com/Project-Helianthus/helianthus-ship-go/api\"\n"},
+		"provenance/closure-manifest.json": {data: string(manifestData)},
+		"LICENSE":                          {data: "fixture license\n"},
+		"release/nested.json":              {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.1"}` + "\n"},
+		"release/release.json":             {data: `{"release_inputs":["release/nested.json"]}` + "\n"},
+		"scripts/release.sh":               {data: "#!/bin/sh\nset -eu\ntest -f \"${1:?release config required}\"\n", executable: true},
+		"vendor/modules.txt":               {data: "# github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1\n## explicit; go 1.22\ngithub.com/Project-Helianthus/helianthus-ship-go/api\n"},
 	}
 }
 
@@ -353,10 +394,68 @@ func replaceFixtureText(path, old, new string) func(map[string]closureFixtureFil
 	}
 }
 
+func mutateFixtureManifest(mutate func(map[string]any)) func(map[string]closureFixtureFile) {
+	return func(files map[string]closureFixtureFile) {
+		file := files["provenance/closure-manifest.json"]
+		var manifest map[string]any
+		if err := json.Unmarshal([]byte(file.data), &manifest); err != nil {
+			panic(err)
+		}
+		mutate(manifest)
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			panic(err)
+		}
+		file.data = string(append(data, '\n'))
+		files["provenance/closure-manifest.json"] = file
+	}
+}
+
+func manifestObject(parent map[string]any, key string) map[string]any {
+	value, ok := parent[key].(map[string]any)
+	if !ok {
+		panic("manifest object missing: " + key)
+	}
+	return value
+}
+
+func firstReviewedDependency(manifest map[string]any) map[string]any {
+	dependencies, ok := manifest["reviewed_dependencies"].([]any)
+	if !ok || len(dependencies) == 0 {
+		panic("reviewed dependency missing")
+	}
+	dependency, ok := dependencies[0].(map[string]any)
+	if !ok {
+		panic("reviewed dependency malformed")
+	}
+	return dependency
+}
+
 func writeClosureFixture(t *testing.T, edit func(map[string]closureFixtureFile)) string {
+	return writeClosureFixtureWithSupport(t, edit, nil)
+}
+
+func writeClosureFixtureWithSupport(t *testing.T, edit func(map[string]closureFixtureFile), supportEdit func(*testing.T, string)) string {
 	t.Helper()
 	root := t.TempDir()
-	files := baseClosureFixture()
+	t.Cleanup(func() { removeFixtureModuleCache(root) })
+	runFixtureGit(t, root, "init", "-q")
+	exclude := filepath.Join(root, ".git", "info", "exclude")
+	if err := os.WriteFile(exclude, []byte(".artifact-repos/\n.artifact-work/\n.gomodcache/\n.module-proxy/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provenance := createClosureProvenanceFixture(t, root)
+	files := baseClosureFixture(provenance)
+	goMod := files["go.mod"]
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod.data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureGoSum(t, root, provenance.dependencies)
+	goSum, err := os.ReadFile(filepath.Join(root, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["go.sum"] = closureFixtureFile{data: string(goSum)}
 	if edit != nil {
 		edit(files)
 	}
@@ -383,10 +482,218 @@ func writeClosureFixture(t *testing.T, edit func(map[string]closureFixtureFile))
 			t.Fatal(err)
 		}
 	}
-	runFixtureGit(t, root, "init", "-q")
+	if supportEdit != nil {
+		supportEdit(t, root)
+		writeFixtureGoSum(t, root, provenance.dependencies)
+	}
 	runFixtureGit(t, root, "add", "--all")
 	runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "fixture")
 	return root
+}
+
+func mutateFixtureModuleArtifact(module, version, path, replacement string) func(*testing.T, string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+		zipPath := filepath.Join(root, ".module-proxy", escapeModulePath(module), "@v", version+".zip")
+		reader, err := zip.OpenReader(zipPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := make(map[string][]byte)
+		prefix := module + "@" + version + "/"
+		for _, entry := range reader.File {
+			input, err := entry.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(input)
+			_ = input.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			relative := strings.TrimPrefix(entry.Name, prefix)
+			files[relative] = data
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := files[path]; !ok {
+			t.Fatalf("module fixture lacks %s", path)
+		}
+		files[path] = []byte(replacement)
+		identity := fixtureIdentity{module: module, version: version}
+		writeModuleProxyVersion(t, root, identity, files)
+	}
+}
+
+func createClosureProvenanceFixture(t *testing.T, root string) closureProvenanceFixture {
+	t.Helper()
+	upstream := createFixtureIdentity(t, root, "upstream", "example.com/upstream", "v0.0.0", false)
+	dependencies := []fixtureIdentity{
+		createFixtureIdentity(t, root, "eebus", canonicalEEBus, reviewedEEBus, true),
+		createFixtureIdentity(t, root, "ship", canonicalShip, canonicalVer, true),
+		createFixtureIdentity(t, root, "spine", canonicalSpine, reviewedSpine, true),
+	}
+	return closureProvenanceFixture{upstream: upstream, dependencies: dependencies}
+}
+
+func createFixtureIdentity(t *testing.T, root, name, module, version string, moduleArtifact bool) fixtureIdentity {
+	t.Helper()
+	work := filepath.Join(root, ".artifact-work", name)
+	repository := filepath.Join(root, ".artifact-repos", name+".git")
+	if err := os.MkdirAll(filepath.Join(work, "provenance"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	license := []byte("fixture dependency license\n")
+	manifest := []byte(fmt.Sprintf("{\"module\":%q,\"schema\":\"fixture.provenance.v1\"}\n", module))
+	if err := os.WriteFile(filepath.Join(work, "LICENSE"), license, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "provenance", "closure-manifest.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte("module "+module+"\n\ngo 1.22.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runFixtureGit(t, work, "init", "-q")
+	runFixtureGit(t, work, "add", "--all")
+	runFixtureGit(t, work, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "fixture")
+	runFixtureGit(t, work, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "fixture tag")
+	if err := os.MkdirAll(filepath.Dir(repository), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runFixtureGit(t, root, "clone", "--quiet", "--bare", work, repository)
+	identity := fixtureIdentity{
+		module:         module,
+		version:        version,
+		repository:     filepath.ToSlash(filepath.Join(".artifact-repos", name+".git")),
+		ref:            "refs/tags/" + version,
+		licenseDigest:  fmt.Sprintf("%x", sha256.Sum256(license)),
+		manifestDigest: fmt.Sprintf("%x", sha256.Sum256(manifest)),
+		tag:            fixtureGitOutput(t, work, "rev-parse", version),
+		commit:         fixtureGitOutput(t, work, "rev-parse", version+"^{commit}"),
+		tree:           fixtureGitOutput(t, work, "rev-parse", version+"^{tree}"),
+	}
+	if moduleArtifact {
+		writeModuleProxyVersion(t, root, identity, map[string][]byte{
+			"LICENSE":                          license,
+			"go.mod":                           []byte("module " + module + "\n\ngo 1.22.0\n"),
+			"provenance/closure-manifest.json": manifest,
+		})
+	}
+	return identity
+}
+
+func writeModuleProxyVersion(t *testing.T, root string, identity fixtureIdentity, files map[string][]byte) {
+	t.Helper()
+	directory := filepath.Join(root, ".module-proxy", escapeModulePath(identity.module), "@v")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "list"), []byte(identity.version+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info := []byte(fmt.Sprintf("{\"Version\":%q,\"Time\":\"2026-07-16T00:00:00Z\"}\n", identity.version))
+	if err := os.WriteFile(filepath.Join(directory, identity.version+".info"), info, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, identity.version+".mod"), files["go.mod"], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := filepath.Join(directory, identity.version+".zip")
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(zipFile)
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		entry, err := writer.Create(identity.module + "@" + identity.version + "/" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(files[path]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFixtureGoSum(t *testing.T, root string, dependencies []fixtureIdentity) {
+	t.Helper()
+	removeFixtureModuleCache(root)
+	if err := os.Remove(filepath.Join(root, "go.sum")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, dependency := range dependencies {
+		cmd := exec.Command("go", "mod", "download", "-json", dependency.module+"@"+dependency.version)
+		cmd.Dir = root
+		cmd.Env = fixtureGoEnvironment(root)
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("prepare module fixture %s: %v", dependency.module, err)
+		}
+		var downloaded struct {
+			Sum, GoModSum string
+		}
+		if err := json.Unmarshal(output, &downloaded); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines,
+			dependency.module+" "+dependency.version+" "+downloaded.Sum,
+			dependency.module+" "+dependency.version+"/go.mod "+downloaded.GoModSum,
+		)
+	}
+	sort.Strings(lines)
+	if err := os.WriteFile(filepath.Join(root, "go.sum"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeFixtureModuleCache(root)
+}
+
+func fixtureGoEnvironment(root string) []string {
+	return append(os.Environ(),
+		"GOFLAGS=-mod=readonly",
+		"GOMODCACHE="+filepath.Join(root, ".gomodcache"),
+		"GONOSUMDB=*",
+		"GOPROXY=file://"+filepath.Join(root, ".module-proxy"),
+		"GOSUMDB=off",
+		"GOWORK=off",
+	)
+}
+
+func escapeModulePath(path string) string {
+	var escaped strings.Builder
+	for _, character := range path {
+		if character >= 'A' && character <= 'Z' {
+			escaped.WriteByte('!')
+			escaped.WriteRune(character + ('a' - 'A'))
+			continue
+		}
+		escaped.WriteRune(character)
+	}
+	return escaped.String()
+}
+
+func fixtureGitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func runFixtureGit(t *testing.T, root string, args ...string) {
@@ -401,16 +708,31 @@ func runFixtureGit(t *testing.T, root string, args ...string) {
 
 func runFixtureVerifier(t *testing.T, verifier, root string) closureResult {
 	t.Helper()
+	removeFixtureModuleCache(root)
 	outputDir := t.TempDir()
 	inventoryPath := filepath.Join(outputDir, "tracked.nul")
 	evidencePath := filepath.Join(outputDir, "evidence.json")
 	cmd := exec.Command("python3", verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json", "--inventory-output", inventoryPath, "--evidence-output", evidencePath)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off", "GOSUMDB=off")
+	cmd.Env = fixtureGoEnvironment(root)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	return closureResult{err: err, stdout: stdout.Bytes(), stderr: stderr.Bytes(), inventory: readFixtureOutput(t, inventoryPath), evidence: readFixtureOutput(t, evidencePath)}
+}
+
+func removeFixtureModuleCache(root string) {
+	cache := filepath.Join(root, ".gomodcache")
+	_ = filepath.Walk(cache, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.Chmod(path, 0o700)
+		}
+		return os.Chmod(path, 0o600)
+	})
+	_ = os.RemoveAll(cache)
 }
 
 func readFixtureOutput(t *testing.T, path string) []byte {
@@ -435,7 +757,7 @@ func assertFixtureResult(t *testing.T, root string, result closureResult, test c
 	evidence := decodeCanonicalEvidence(t, result.evidence)
 	digest := sha256.Sum256(wantInventory)
 	inventory, ok := evidence["tracked_inventory"].(map[string]any)
-	if evidence["schema"] != "helianthus.dependency-closure-evidence.v2" || !ok || inventory["sha256"] != fmt.Sprintf("%x", digest) {
+	if evidence["schema"] != "helianthus.dependency-closure-evidence.v3" || !ok || inventory["sha256"] != fmt.Sprintf("%x", digest) {
 		t.Errorf("evidence identity/digest mismatch: %s", result.evidence)
 	}
 	assertEvidenceFieldsAreStable(t, evidence)
@@ -509,7 +831,7 @@ func decodeCanonicalEvidence(t *testing.T, data []byte) map[string]any {
 
 func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 	t.Helper()
-	wantFields := []string{"commands", "inputs", "manifest", "result", "schema", "source_sha", "tracked_inventory", "verifier", "violations"}
+	wantFields := []string{"artifacts", "commands", "git_refs", "inputs", "manifest", "result", "schema", "source_sha", "tracked_inventory", "verifier", "violations"}
 	if len(evidence) != len(wantFields) {
 		t.Errorf("evidence has unexpected top-level shape: %v", evidence)
 	}
@@ -522,7 +844,7 @@ func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 	if !ok || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sourceSHA) {
 		t.Errorf("evidence source_sha = %v; want full commit", evidence["source_sha"])
 	}
-	for _, field := range []string{"inputs", "violations"} {
+	for _, field := range []string{"artifacts", "git_refs", "inputs", "violations"} {
 		values, ok := evidence[field].([]any)
 		if !ok {
 			t.Errorf("evidence %s is %T, want array", field, evidence[field])
@@ -535,10 +857,22 @@ func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 				continue
 			}
 			wantKeys := 4
+			if field == "git_refs" {
+				wantKeys = 6
+			}
 			if field == "violations" {
 				wantKeys = 3
 			}
-			if len(object) != wantKeys || object["path"] == nil || object["class"] == nil || field == "violations" && object["reason"] == nil || field == "inputs" && (object["sha256"] == nil || object["source_sha"] != sourceSHA) {
+			valid := len(object) == wantKeys
+			switch field {
+			case "artifacts", "inputs":
+				valid = valid && object["path"] != nil && object["class"] != nil && object["sha256"] != nil && object["source_sha"] == sourceSHA
+			case "git_refs":
+				valid = valid && object["repository"] != nil && object["ref"] != nil && object["tag_object_sha"] != nil && object["peeled_commit_sha"] != nil && object["tree_sha"] != nil && object["source_sha"] == sourceSHA
+			case "violations":
+				valid = valid && object["path"] != nil && object["class"] != nil && object["reason"] != nil
+			}
+			if !valid {
 				t.Errorf("evidence %s entry has an unstable shape: %v", field, object)
 			}
 		}
@@ -550,8 +884,8 @@ func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 		}
 	}
 	commands, ok := evidence["commands"].([]any)
-	if !ok || len(commands) != 5 {
-		t.Errorf("evidence commands = %v; want five versioned commands", evidence["commands"])
+	if !ok || len(commands) != 7 {
+		t.Errorf("evidence commands = %v; want seven versioned commands", evidence["commands"])
 	}
 }
 

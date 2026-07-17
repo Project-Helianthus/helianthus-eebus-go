@@ -12,18 +12,18 @@ on:
   pull_request:
   workflow_call:
 
-permissions:
-  contents: read
-  security-events: write
-
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -141,13 +141,37 @@ jobs:
         with:
           file: coverage.out
 
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
       - name: Run Gosec Security Scanner
+        id: gosec
+        continue-on-error: true
         uses: securego/gosec@6fbd381238e97e1d1f3358f0d6d65de78dcf9245 # v2.20.0
         with:
-          # GitHub Security evaluates the uploaded report.
-          args: '-no-fail -fmt sarif -out results.sarif ./...'
+          args: '-fmt sarif -out results.sarif ./...'
 
       - name: Upload SARIF file
+        if: always()
         uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3
         with:
           sarif_file: results.sarif
+
+      - name: Enforce Gosec outcome
+        if: always()
+        run: test "${{ steps.gosec.outcome }}" = success

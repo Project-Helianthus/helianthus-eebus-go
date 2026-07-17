@@ -34,6 +34,18 @@ type connectionsHubFactory func(
 	*shipapi.ServiceDetails,
 ) shipapi.HubInterface
 
+type lifecycleState uint8
+
+const (
+	lifecycleUninitialized lifecycleState = iota
+	lifecycleSettingUp
+	lifecycleReady
+	lifecycleStarting
+	lifecycleRunning
+	lifecycleStopping
+	lifecycleStopped
+)
+
 func defaultConnectionsHubFactory(
 	reader shipapi.HubReaderInterface,
 	mdnsService shipapi.MdnsInterface,
@@ -71,9 +83,8 @@ type Service struct {
 
 	connectionsHubFactory connectionsHubFactory
 
-	startOnce    sync.Once
-	shutdownOnce sync.Once
 	lifecycleMux sync.Mutex
+	lifecycle    lifecycleState
 
 	mux sync.Mutex
 }
@@ -105,11 +116,29 @@ var _ api.ServiceInterface = (*Service)(nil)
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
 	s.lifecycleMux.Lock()
-	defer s.lifecycleMux.Unlock()
-
-	if s.connectionsHub != nil {
+	switch s.lifecycle {
+	case lifecycleSettingUp:
+		s.lifecycleMux.Unlock()
+		return errors.New("setup already in progress")
+	case lifecycleReady, lifecycleStarting, lifecycleRunning, lifecycleStopping, lifecycleStopped:
+		s.lifecycleMux.Unlock()
 		return nil
 	}
+	s.lifecycle = lifecycleSettingUp
+	s.lifecycleMux.Unlock()
+
+	setupSucceeded := false
+	defer func() {
+		if setupSucceeded {
+			return
+		}
+		s.lifecycleMux.Lock()
+		if s.lifecycle == lifecycleSettingUp {
+			s.lifecycle = lifecycleUninitialized
+		}
+		s.lifecycleMux.Unlock()
+	}()
+
 	if s.bridgeEnabled {
 		if isNilInterface(s.outgoingAttemptGate) {
 			return errors.New("missing outgoing attempt gate")
@@ -227,9 +256,13 @@ func (s *Service) Setup() error {
 		}
 	}
 
+	s.lifecycleMux.Lock()
 	s.localService = localService
 	s.spineLocalDevice = spineLocalDevice
 	s.connectionsHub = connectionsHub
+	s.lifecycle = lifecycleReady
+	setupSucceeded = true
+	s.lifecycleMux.Unlock()
 
 	return nil
 }
@@ -237,27 +270,42 @@ func (s *Service) Setup() error {
 // Starts the service
 func (s *Service) Start() {
 	s.lifecycleMux.Lock()
-	defer s.lifecycleMux.Unlock()
-
-	if s.connectionsHub == nil {
+	if s.lifecycle != lifecycleReady {
+		s.lifecycleMux.Unlock()
 		return
 	}
-	s.startOnce.Do(func() {
-		s.connectionsHub.Start()
-	})
+	hub := s.connectionsHub
+	s.lifecycle = lifecycleStarting
+	s.lifecycleMux.Unlock()
+
+	hub.Start()
+
+	s.lifecycleMux.Lock()
+	if s.lifecycle == lifecycleStarting {
+		s.lifecycle = lifecycleRunning
+	}
+	s.lifecycleMux.Unlock()
 }
 
 // Shutdown all services and stop the server.
 func (s *Service) Shutdown() {
 	s.lifecycleMux.Lock()
-	defer s.lifecycleMux.Unlock()
-
-	if s.connectionsHub == nil {
+	switch s.lifecycle {
+	case lifecycleReady, lifecycleStarting, lifecycleRunning:
+		// Continue below after making the terminal transition visible.
+	default:
+		s.lifecycleMux.Unlock()
 		return
 	}
-	s.shutdownOnce.Do(func() {
-		s.connectionsHub.Shutdown()
-	})
+	hub := s.connectionsHub
+	s.lifecycle = lifecycleStopping
+	s.lifecycleMux.Unlock()
+
+	hub.Shutdown()
+
+	s.lifecycleMux.Lock()
+	s.lifecycle = lifecycleStopped
+	s.lifecycleMux.Unlock()
 }
 
 func isNilInterface(value any) bool {
