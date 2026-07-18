@@ -357,7 +357,7 @@ func baseClosureFixture(provenance closureProvenanceFixture) map[string]closureF
 go 1.22.0
 
 require (
-	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1
+	github.com/Project-Helianthus/helianthus-ship-go ` + canonicalVer + `
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.1
 	github.com/Project-Helianthus/helianthus-eebus-go v0.7.0-helianthus.1
 	example.com/unrelated v0.0.0-20260716000000-0123456789ab
@@ -367,10 +367,10 @@ require (
 		"main.go":                          {data: "package fixture\n\nimport _ \"github.com/Project-Helianthus/helianthus-ship-go/api\"\n"},
 		"provenance/closure-manifest.json": {data: string(manifestData)},
 		"LICENSE":                          {data: "fixture license\n"},
-		"release/nested.json":              {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.1"}` + "\n"},
+		"release/nested.json":              {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@` + canonicalVer + `"}` + "\n"},
 		"release/release.json":             {data: `{"release_inputs":["release/nested.json"]}` + "\n"},
 		"scripts/release.sh":               {data: "#!/bin/sh\nset -eu\ntest -f \"${1:?release config required}\"\n", executable: true},
-		"vendor/modules.txt":               {data: "# github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1\n## explicit; go 1.22\ngithub.com/Project-Helianthus/helianthus-ship-go/api\n"},
+		"vendor/modules.txt":               {data: "# github.com/Project-Helianthus/helianthus-ship-go " + canonicalVer + "\n## explicit; go 1.22\ngithub.com/Project-Helianthus/helianthus-ship-go/api\n"},
 	}
 }
 
