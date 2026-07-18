@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strconv"
 	"sync"
@@ -26,6 +27,18 @@ type OutgoingAttemptBridgeConfiguration struct {
 	Sink shipapi.OutgoingAttemptHubReaderInterface
 }
 
+// ListenerPolicy defines the exact SHIP listener endpoint and discovery behavior.
+type ListenerPolicy struct {
+	ListenAddress    netip.AddrPort
+	DiscoveryEnabled bool
+}
+
+// ServiceOptions composes optional service runtime policies.
+type ServiceOptions struct {
+	ListenerPolicy        *ListenerPolicy
+	OutgoingAttemptBridge *OutgoingAttemptBridgeConfiguration
+}
+
 type connectionsHubFactory func(
 	shipapi.HubReaderInterface,
 	shipapi.MdnsInterface,
@@ -33,6 +46,20 @@ type connectionsHubFactory func(
 	tls.Certificate,
 	*shipapi.ServiceDetails,
 ) shipapi.HubInterface
+
+type scopedConnectionsHubFactory func(
+	shipapi.HubReaderInterface,
+	shipapi.MdnsInterface,
+	int,
+	tls.Certificate,
+	*shipapi.ServiceDetails,
+	ListenerPolicy,
+) (shipapi.HubInterface, error)
+
+type listenerPolicyHub interface {
+	shipapi.HubInterface
+	StartWithPolicy() error
+}
 
 type lifecycleState uint8
 
@@ -44,6 +71,7 @@ const (
 	lifecycleRunning
 	lifecycleStopping
 	lifecycleStopped
+	lifecycleTerminal
 )
 
 func defaultConnectionsHubFactory(
@@ -54,6 +82,27 @@ func defaultConnectionsHubFactory(
 	localService *shipapi.ServiceDetails,
 ) shipapi.HubInterface {
 	return hub.NewHub(reader, mdnsService, port, certificate, localService)
+}
+
+func defaultScopedConnectionsHubFactory(
+	reader shipapi.HubReaderInterface,
+	mdnsService shipapi.MdnsInterface,
+	port int,
+	certificate tls.Certificate,
+	localService *shipapi.ServiceDetails,
+	policy ListenerPolicy,
+) (shipapi.HubInterface, error) {
+	return hub.NewHubWithListenerPolicy(
+		reader,
+		mdnsService,
+		port,
+		certificate,
+		localService,
+		shipapi.ListenerPolicy{
+			ListenAddress:    policy.ListenAddress,
+			DiscoveryEnabled: policy.DiscoveryEnabled,
+		},
+	)
 }
 
 // A service is the central element of an EEBUS service
@@ -80,8 +129,10 @@ type Service struct {
 	bridgeEnabled       bool
 	outgoingAttemptGate shipapi.OutgoingAttemptGate
 	outgoingAttemptSink shipapi.OutgoingAttemptHubReaderInterface
+	listenerPolicy      *ListenerPolicy
 
-	connectionsHubFactory connectionsHubFactory
+	connectionsHubFactory       connectionsHubFactory
+	scopedConnectionsHubFactory scopedConnectionsHubFactory
 
 	lifecycleMux sync.Mutex
 	lifecycle    lifecycleState
@@ -91,11 +142,7 @@ type Service struct {
 
 // creates a new EEBUS service
 func NewService(configuration *api.Configuration, serviceHandler api.ServiceReaderInterface) *Service {
-	return &Service{
-		configuration:         configuration,
-		serviceHandler:        serviceHandler,
-		connectionsHubFactory: defaultConnectionsHubFactory,
-	}
+	return NewServiceWithOptions(configuration, serviceHandler, ServiceOptions{})
 }
 
 // NewServiceWithOutgoingAttemptBridge creates a service with attempt-aware SHIP callbacks.
@@ -104,10 +151,35 @@ func NewServiceWithOutgoingAttemptBridge(
 	serviceHandler api.ServiceReaderInterface,
 	bridge OutgoingAttemptBridgeConfiguration,
 ) *Service {
-	service := NewService(configuration, serviceHandler)
-	service.bridgeEnabled = true
-	service.outgoingAttemptGate = bridge.Gate
-	service.outgoingAttemptSink = bridge.Sink
+	return NewServiceWithOptions(configuration, serviceHandler, ServiceOptions{
+		OutgoingAttemptBridge: &bridge,
+	})
+}
+
+// NewServiceWithOptions creates a service with optional runtime policies.
+func NewServiceWithOptions(
+	configuration *api.Configuration,
+	serviceHandler api.ServiceReaderInterface,
+	options ServiceOptions,
+) *Service {
+	service := &Service{
+		configuration:               configuration,
+		serviceHandler:              serviceHandler,
+		connectionsHubFactory:       defaultConnectionsHubFactory,
+		scopedConnectionsHubFactory: defaultScopedConnectionsHubFactory,
+	}
+
+	if options.ListenerPolicy != nil {
+		policy := *options.ListenerPolicy
+		service.listenerPolicy = &policy
+	}
+	if options.OutgoingAttemptBridge != nil {
+		bridge := *options.OutgoingAttemptBridge
+		service.bridgeEnabled = true
+		service.outgoingAttemptGate = bridge.Gate
+		service.outgoingAttemptSink = bridge.Sink
+	}
+
 	return service
 }
 
@@ -120,7 +192,7 @@ func (s *Service) Setup() error {
 	case lifecycleSettingUp:
 		s.lifecycleMux.Unlock()
 		return errors.New("setup already in progress")
-	case lifecycleReady, lifecycleStarting, lifecycleRunning, lifecycleStopping, lifecycleStopped:
+	case lifecycleReady, lifecycleStarting, lifecycleRunning, lifecycleStopping, lifecycleStopped, lifecycleTerminal:
 		s.lifecycleMux.Unlock()
 		return nil
 	}
@@ -147,10 +219,13 @@ func (s *Service) Setup() error {
 			return errors.New("missing outgoing attempt sink")
 		}
 	}
-	if s.connectionsHubFactory == nil {
+	if s.listenerPolicy != nil {
+		if s.scopedConnectionsHubFactory == nil {
+			return errors.New("missing scoped connections hub factory")
+		}
+	} else if s.connectionsHubFactory == nil {
 		return errors.New("missing connections hub factory")
 	}
-
 	sd := s.configuration
 
 	if len(sd.Certificate().Certificate) == 0 {
@@ -235,16 +310,36 @@ func (s *Service) Setup() error {
 		sd.MdnsProviderSelection(),
 	)
 
-	// Setup connections hub with mDNS and websocket connection handling
-	connectionsHub := s.connectionsHubFactory(
-		s,
-		mdnsService,
-		s.configuration.Port(),
-		s.configuration.Certificate(),
-		localService,
-	)
+	// Setup connections hub with mDNS and websocket connection handling.
+	var connectionsHub shipapi.HubInterface
+	if s.listenerPolicy != nil {
+		connectionsHub, err = s.scopedConnectionsHubFactory(
+			s,
+			mdnsService,
+			s.configuration.Port(),
+			s.configuration.Certificate(),
+			localService,
+			*s.listenerPolicy,
+		)
+		if err != nil {
+			return fmt.Errorf("create scoped connections hub: %w", err)
+		}
+	} else {
+		connectionsHub = s.connectionsHubFactory(
+			s,
+			mdnsService,
+			s.configuration.Port(),
+			s.configuration.Certificate(),
+			localService,
+		)
+	}
 	if isNilInterface(connectionsHub) {
 		return errors.New("connections hub factory returned nil")
+	}
+	if s.listenerPolicy != nil {
+		if _, ok := connectionsHub.(listenerPolicyHub); !ok {
+			return errors.New("scoped connections hub does not support listener policy startup")
+		}
 	}
 	if s.bridgeEnabled {
 		setter, ok := connectionsHub.(shipapi.OutgoingAttemptGateSetter)
@@ -269,6 +364,13 @@ func (s *Service) Setup() error {
 
 // Starts the service
 func (s *Service) Start() {
+	if s.listenerPolicy != nil {
+		if err := s.StartWithPolicy(); err != nil {
+			logging.Log().Debug("error during listener policy service startup:", err)
+		}
+		return
+	}
+
 	s.lifecycleMux.Lock()
 	if s.lifecycle != lifecycleReady {
 		s.lifecycleMux.Unlock()
@@ -285,6 +387,70 @@ func (s *Service) Start() {
 		s.lifecycle = lifecycleRunning
 	}
 	s.lifecycleMux.Unlock()
+}
+
+// StartWithPolicy synchronously starts a service configured with a listener policy.
+func (s *Service) StartWithPolicy() error {
+	if s.listenerPolicy == nil {
+		return errors.New("service has no listener policy")
+	}
+
+	s.lifecycleMux.Lock()
+	wasRunning := false
+	switch s.lifecycle {
+	case lifecycleReady:
+		// Continue below.
+	case lifecycleRunning:
+		// Re-enter the hub so an asynchronously terminal listener is observable.
+		wasRunning = true
+	case lifecycleStarting:
+		s.lifecycleMux.Unlock()
+		return errors.New("listener policy service startup is already in progress")
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errors.New("listener policy service lifecycle is terminal")
+	default:
+		s.lifecycleMux.Unlock()
+		return errors.New("listener policy service is not ready")
+	}
+
+	hub := s.connectionsHub
+	starter, ok := hub.(listenerPolicyHub)
+	if !ok || isNilInterface(starter) {
+		s.lifecycle = lifecycleTerminal
+		s.lifecycleMux.Unlock()
+		return errors.New("scoped connections hub does not support listener policy startup")
+	}
+	if !wasRunning {
+		s.lifecycle = lifecycleStarting
+	}
+	s.lifecycleMux.Unlock()
+
+	if err := starter.StartWithPolicy(); err != nil {
+		s.lifecycleMux.Lock()
+		claimCleanup := (!wasRunning && s.lifecycle == lifecycleStarting) ||
+			(wasRunning && s.lifecycle == lifecycleRunning)
+		if claimCleanup {
+			s.lifecycle = lifecycleTerminal
+		}
+		s.lifecycleMux.Unlock()
+
+		if claimCleanup {
+			hub.Shutdown()
+		}
+		return err
+	}
+	if wasRunning {
+		return nil
+	}
+
+	s.lifecycleMux.Lock()
+	defer s.lifecycleMux.Unlock()
+	if s.lifecycle == lifecycleStarting {
+		s.lifecycle = lifecycleRunning
+		return nil
+	}
+	return errors.New("listener policy service lifecycle is terminal")
 }
 
 // Shutdown all services and stop the server.
