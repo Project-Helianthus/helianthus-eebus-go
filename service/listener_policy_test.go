@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"reflect"
@@ -73,15 +74,15 @@ func TestServiceOptionsComposeListenerPolicyAndOutgoingAttemptBridge(t *testing.
 
 func TestScopedStartBindsExactLoopbackAndReleasesIdempotently(t *testing.T) {
 	t.Run("IPv4", func(t *testing.T) {
-		endpoint := listenerPolicyAvailableEndpoint(t, netip.MustParseAddr("127.0.0.1"))
+		alternate, endpoint := listenerPolicyHoldAlternateLoopback(t)
+		t.Cleanup(func() { _ = alternate.Close() })
 		sut := newListenerPolicyService(t, endpoint, false)
 		require.NoError(t, sut.Setup())
 		t.Cleanup(sut.Shutdown)
 		require.NoError(t, startScopedService(t, sut))
 
 		listenerPolicyDial(t, endpoint)
-		alternate := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.2"), endpoint.Port())
-		listenerPolicyRequireUnreachable(t, alternate)
+		require.NoError(t, alternate.Close())
 		listenerPolicyConcurrentShutdown(t, sut, 8)
 		listenerPolicyRequireRebind(t, endpoint)
 	})
@@ -100,6 +101,51 @@ func TestScopedStartBindsExactLoopbackAndReleasesIdempotently(t *testing.T) {
 		listenerPolicyConcurrentShutdown(t, sut, 8)
 		listenerPolicyRequireRebind(t, endpoint)
 	})
+}
+
+func TestScopedStartObservesAsynchronousHubTerminalState(t *testing.T) {
+	terminalErr := errors.New("SHIP listener lifecycle is terminal")
+	hub := &listenerPolicyLifecycleHub{}
+	sut := serviceWithReadyListenerPolicyHub(hub)
+
+	require.NoError(t, sut.StartWithPolicy())
+	hub.setStartError(terminalErr)
+	require.ErrorIs(t, sut.StartWithPolicy(), terminalErr)
+	assert.Equal(t, lifecycleTerminal, serviceLifecycle(sut))
+	assert.Equal(t, 1, hub.shutdownCount())
+
+	sut.Shutdown()
+	assert.Equal(t, 1, hub.shutdownCount(), "terminal cleanup must remain exactly once")
+}
+
+func TestScopedStartRacingShutdownReturnsTerminalAndCleansOnce(t *testing.T) {
+	hub := &listenerPolicyLifecycleHub{
+		startEntered: make(chan struct{}),
+		startRelease: make(chan struct{}),
+	}
+	sut := serviceWithReadyListenerPolicyHub(hub)
+	startResult := make(chan error, 1)
+	go func() { startResult <- sut.StartWithPolicy() }()
+	<-hub.startEntered
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		sut.Shutdown()
+		close(shutdownDone)
+	}()
+	<-shutdownDone
+	close(hub.startRelease)
+
+	err := <-startResult
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "terminal")
+	assert.Equal(t, lifecycleStopped, serviceLifecycle(sut))
+	assert.Equal(t, 1, hub.shutdownCount())
+}
+
+func TestLegacySetupChecksMissingFactoryBeforeConfiguration(t *testing.T) {
+	sut := &Service{}
+	require.EqualError(t, sut.Setup(), "missing connections hub factory")
 }
 
 func TestDiscoveryPolicyIsIndependentFromPairingAndListenerStartup(t *testing.T) {
@@ -262,6 +308,20 @@ func listenerPolicyAvailableEndpoint(t *testing.T, address netip.Addr) netip.Add
 	return endpoint
 }
 
+func listenerPolicyHoldAlternateLoopback(t *testing.T) (*net.TCPListener, netip.AddrPort) {
+	t.Helper()
+	alternateAddress := netip.MustParseAddr("127.0.0.2")
+	alternate, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(alternateAddress, 0)))
+	if err != nil {
+		t.Skipf("alternate IPv4 loopback unavailable: %v", err)
+	}
+	alternateEndpoint := alternate.Addr().(*net.TCPAddr).AddrPort()
+	endpoint := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), alternateEndpoint.Port())
+	probe := listenerPolicyListen(t, endpoint)
+	require.NoError(t, probe.Close())
+	return alternate, endpoint
+}
+
 func listenerPolicyAvailableIPv6Endpoint(t *testing.T) (netip.AddrPort, bool) {
 	t.Helper()
 	listener, err := net.ListenTCP("tcp6", net.TCPAddrFromAddrPort(netip.MustParseAddrPort("[::1]:0")))
@@ -292,15 +352,6 @@ func listenerPolicyDial(t *testing.T, endpoint netip.AddrPort) {
 	require.NoError(t, connection.Close())
 }
 
-func listenerPolicyRequireUnreachable(t *testing.T, endpoint netip.AddrPort) {
-	t.Helper()
-	connection, err := net.DialTimeout("tcp4", endpoint.String(), 200*time.Millisecond)
-	if connection != nil {
-		_ = connection.Close()
-	}
-	require.Error(t, err, "listener unexpectedly widened to %s", endpoint)
-}
-
 func listenerPolicyConcurrentShutdown(t *testing.T, sut *Service, calls int) {
 	t.Helper()
 	var wait sync.WaitGroup
@@ -319,4 +370,59 @@ func listenerPolicyRequireRebind(t *testing.T, endpoint netip.AddrPort) {
 	t.Helper()
 	listener := listenerPolicyListen(t, endpoint)
 	require.NoError(t, listener.Close())
+}
+
+type listenerPolicyLifecycleHub struct {
+	hubRuntimeRecorder
+	mux          sync.Mutex
+	startErr     error
+	shutdowns    int
+	startEntered chan struct{}
+	startRelease chan struct{}
+	enterOnce    sync.Once
+}
+
+func (h *listenerPolicyLifecycleHub) StartWithPolicy() error {
+	if h.startEntered != nil {
+		h.enterOnce.Do(func() { close(h.startEntered) })
+	}
+	if h.startRelease != nil {
+		<-h.startRelease
+	}
+	h.mux.Lock()
+	defer h.mux.Unlock()
+	return h.startErr
+}
+
+func (h *listenerPolicyLifecycleHub) Shutdown() {
+	h.mux.Lock()
+	h.shutdowns++
+	h.mux.Unlock()
+}
+
+func (h *listenerPolicyLifecycleHub) setStartError(err error) {
+	h.mux.Lock()
+	h.startErr = err
+	h.mux.Unlock()
+}
+
+func (h *listenerPolicyLifecycleHub) shutdownCount() int {
+	h.mux.Lock()
+	defer h.mux.Unlock()
+	return h.shutdowns
+}
+
+func serviceWithReadyListenerPolicyHub(hub *listenerPolicyLifecycleHub) *Service {
+	policy := ListenerPolicy{}
+	return &Service{
+		listenerPolicy: &policy,
+		connectionsHub: hub,
+		lifecycle:      lifecycleReady,
+	}
+}
+
+func serviceLifecycle(sut *Service) lifecycleState {
+	sut.lifecycleMux.Lock()
+	defer sut.lifecycleMux.Unlock()
+	return sut.lifecycle
 }

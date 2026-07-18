@@ -219,6 +219,13 @@ func (s *Service) Setup() error {
 			return errors.New("missing outgoing attempt sink")
 		}
 	}
+	if s.listenerPolicy != nil {
+		if s.scopedConnectionsHubFactory == nil {
+			return errors.New("missing scoped connections hub factory")
+		}
+	} else if s.connectionsHubFactory == nil {
+		return errors.New("missing connections hub factory")
+	}
 	sd := s.configuration
 
 	if len(sd.Certificate().Certificate) == 0 {
@@ -306,9 +313,6 @@ func (s *Service) Setup() error {
 	// Setup connections hub with mDNS and websocket connection handling.
 	var connectionsHub shipapi.HubInterface
 	if s.listenerPolicy != nil {
-		if s.scopedConnectionsHubFactory == nil {
-			return errors.New("missing scoped connections hub factory")
-		}
 		connectionsHub, err = s.scopedConnectionsHubFactory(
 			s,
 			mdnsService,
@@ -321,9 +325,6 @@ func (s *Service) Setup() error {
 			return fmt.Errorf("create scoped connections hub: %w", err)
 		}
 	} else {
-		if s.connectionsHubFactory == nil {
-			return errors.New("missing connections hub factory")
-		}
 		connectionsHub = s.connectionsHubFactory(
 			s,
 			mdnsService,
@@ -395,12 +396,13 @@ func (s *Service) StartWithPolicy() error {
 	}
 
 	s.lifecycleMux.Lock()
+	wasRunning := false
 	switch s.lifecycle {
 	case lifecycleReady:
 		// Continue below.
 	case lifecycleRunning:
-		s.lifecycleMux.Unlock()
-		return nil
+		// Re-enter the hub so an asynchronously terminal listener is observable.
+		wasRunning = true
 	case lifecycleStarting:
 		s.lifecycleMux.Unlock()
 		return errors.New("listener policy service startup is already in progress")
@@ -419,12 +421,15 @@ func (s *Service) StartWithPolicy() error {
 		s.lifecycleMux.Unlock()
 		return errors.New("scoped connections hub does not support listener policy startup")
 	}
-	s.lifecycle = lifecycleStarting
+	if !wasRunning {
+		s.lifecycle = lifecycleStarting
+	}
 	s.lifecycleMux.Unlock()
 
 	if err := starter.StartWithPolicy(); err != nil {
 		s.lifecycleMux.Lock()
-		claimCleanup := s.lifecycle == lifecycleStarting
+		claimCleanup := (!wasRunning && s.lifecycle == lifecycleStarting) ||
+			(wasRunning && s.lifecycle == lifecycleRunning)
 		if claimCleanup {
 			s.lifecycle = lifecycleTerminal
 		}
@@ -434,6 +439,9 @@ func (s *Service) StartWithPolicy() error {
 			hub.Shutdown()
 		}
 		return err
+	}
+	if wasRunning {
+		return nil
 	}
 
 	s.lifecycleMux.Lock()

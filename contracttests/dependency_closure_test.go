@@ -29,7 +29,7 @@ const (
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "fef197105b4b8e368c65f97e8fa87b5ce4e883f109920c192f5d40c85e21c7ff"
+	productionHash    = "a00686fa749a84bf45d5e1936080333694db04fa835e8b7f13bb36d3d1f1f482"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -177,7 +177,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-eebus-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.0-helianthus.1"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.2"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/eebus-go.git"},
 		{"upstream.ref", manifest.Upstream.Ref, "refs/tags/v0.7.0"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},

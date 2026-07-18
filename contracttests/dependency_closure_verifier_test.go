@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ const (
 	verifierCLI     = "python3 scripts/verify_dependency_closure.py --repo . --manifest provenance/closure-manifest.json --inventory-output <path> --evidence-output <path>"
 	canonicalEEBus  = canonicalModule
 	reviewedSpine   = "v0.7.1-helianthus.1"
-	reviewedEEBus   = "v0.7.0-helianthus.1"
+	reviewedEEBus   = "v0.7.1-helianthus.2"
 	privateSentinel = "PRIVATE-CONTENT-must-not-leak-8f2c6f71"
 )
 
@@ -130,13 +131,14 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 		{"eebus", canonicalEEBus, reviewedEEBus},
 	}
 	for _, fork := range forks {
+		baseVersion, sequence := splitHelianthusVersion(t, fork.reviewed)
 		badVersions := []struct{ name, version string }{
-			{"pseudo version", strings.TrimSuffix(fork.reviewed, "-helianthus.1") + "-0.20260716000000-0123456789ab"},
+			{"pseudo version", baseVersion + "-0.20260716000000-0123456789ab"},
 			{"branch selection", "helianthus-v0.7"},
 			{"main query", "main"},
 			{"dev query", "dev"},
 			{"latest query", "latest"},
-			{"non reviewed tag", strings.TrimSuffix(fork.reviewed, ".1") + ".2"},
+			{"non reviewed tag", fmt.Sprintf("%s-helianthus.%d", baseVersion, sequence+1)},
 		}
 		for _, bad := range badVersions {
 			cases = append(cases, closureCase{
@@ -297,6 +299,20 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 	}
 }
 
+func splitHelianthusVersion(t *testing.T, version string) (string, int) {
+	t.Helper()
+	const marker = "-helianthus."
+	index := strings.LastIndex(version, marker)
+	if index < 0 {
+		t.Fatalf("reviewed version must carry a Helianthus sequence: %s", version)
+	}
+	sequence, err := strconv.Atoi(version[index+len(marker):])
+	if err != nil || sequence <= 0 {
+		t.Fatalf("reviewed version must end in a positive numeric Helianthus sequence: %s", version)
+	}
+	return version[:index], sequence
+}
+
 func baseClosureContains(path string) bool {
 	switch path {
 	case ".github/actions/release/action.yml", ".github/workflows/release.yml", "go.mod", "go.sum", "main.go", "LICENSE", "release/nested.json", "release/release.json", "scripts/release.sh", "vendor/modules.txt":
@@ -359,7 +375,7 @@ go 1.22.0
 require (
 	github.com/Project-Helianthus/helianthus-ship-go ` + canonicalVer + `
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.1
-	github.com/Project-Helianthus/helianthus-eebus-go v0.7.0-helianthus.1
+github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.2
 	example.com/unrelated v0.0.0-20260716000000-0123456789ab
 )
 `},
