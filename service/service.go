@@ -137,8 +137,9 @@ type Service struct {
 	connectionsHubFactory       connectionsHubFactory
 	scopedConnectionsHubFactory scopedConnectionsHubFactory
 
-	lifecycleMux sync.Mutex
-	lifecycle    lifecycleState
+	pairingRegistrationMux sync.Mutex
+	lifecycleMux           sync.Mutex
+	lifecycle              lifecycleState
 
 	mux sync.Mutex
 }
@@ -355,38 +356,30 @@ func (s *Service) Setup() error {
 		}
 	}
 	pairingSetter, supportsPairingRegistration := connectionsHub.(pairingRegistrationHub)
-	for {
-		s.mux.Lock()
-		pairingPossible := s.isPairingPossible
-		s.mux.Unlock()
+	s.pairingRegistrationMux.Lock()
+	s.mux.Lock()
+	pairingPossible := s.isPairingPossible
+	s.mux.Unlock()
 
-		if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
-			return errors.New("connections hub does not support pairing registration")
-		}
-		if supportsPairingRegistration && !isNilInterface(pairingSetter) {
-			if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
-				return fmt.Errorf("set initial pairing registration: %w", err)
-			}
-		}
-
-		// Publish only if no concurrent pairing update occurred while the new
-		// hub was being configured. Otherwise apply the latest value and retry.
-		s.lifecycleMux.Lock()
-		s.mux.Lock()
-		if s.isPairingPossible != pairingPossible {
-			s.mux.Unlock()
-			s.lifecycleMux.Unlock()
-			continue
-		}
-		s.localService = localService
-		s.spineLocalDevice = spineLocalDevice
-		s.connectionsHub = connectionsHub
-		s.lifecycle = lifecycleReady
-		setupSucceeded = true
-		s.mux.Unlock()
-		s.lifecycleMux.Unlock()
-		break
+	if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
+		s.pairingRegistrationMux.Unlock()
+		return errors.New("connections hub does not support pairing registration")
 	}
+	if supportsPairingRegistration && !isNilInterface(pairingSetter) {
+		if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
+			s.pairingRegistrationMux.Unlock()
+			return fmt.Errorf("set initial pairing registration: %w", err)
+		}
+	}
+
+	s.lifecycleMux.Lock()
+	s.localService = localService
+	s.spineLocalDevice = spineLocalDevice
+	s.connectionsHub = connectionsHub
+	s.lifecycle = lifecycleReady
+	setupSucceeded = true
+	s.lifecycleMux.Unlock()
+	s.pairingRegistrationMux.Unlock()
 
 	return nil
 }
@@ -589,6 +582,9 @@ func (s *Service) CancelPairingWithSKI(ski string) {
 // SetPairingRegistration controls protected, user-mediated pairing
 // availability without enabling automatic handshake acceptance.
 func (s *Service) SetPairingRegistration(allow bool) error {
+	s.pairingRegistrationMux.Lock()
+	defer s.pairingRegistrationMux.Unlock()
+
 	s.lifecycleMux.Lock()
 	s.mux.Lock()
 	s.isPairingPossible = allow

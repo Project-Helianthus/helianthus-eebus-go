@@ -359,7 +359,7 @@ func (s *ServiceSuite) Test_ConcurrentPairingRegistrationPreservesCallOrder() {
 
 	select {
 	case <-hub.secondEntered:
-	case <-time.After(time.Second):
+	case <-time.After(250 * time.Millisecond):
 	}
 	close(releaseFirst)
 	assert.NoError(s.T(), <-firstDone)
