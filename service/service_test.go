@@ -67,6 +67,41 @@ func (hub *pairingRegistrationHubSpy) Values() []bool {
 	return append([]bool(nil), hub.values...)
 }
 
+type orderedPairingRegistrationHubSpy struct {
+	shipapi.HubInterface
+
+	mu            sync.Mutex
+	calls         int
+	values        []bool
+	firstEntered  chan struct{}
+	secondEntered chan struct{}
+	releaseFirst  <-chan struct{}
+}
+
+func (hub *orderedPairingRegistrationHubSpy) SetPairingRegistration(value bool) error {
+	hub.mu.Lock()
+	hub.calls++
+	call := hub.calls
+	hub.mu.Unlock()
+
+	if call == 1 {
+		close(hub.firstEntered)
+		<-hub.releaseFirst
+	} else if call == 2 {
+		close(hub.secondEntered)
+	}
+	hub.mu.Lock()
+	hub.values = append(hub.values, value)
+	hub.mu.Unlock()
+	return nil
+}
+
+func (hub *orderedPairingRegistrationHubSpy) Values() []bool {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return append([]bool(nil), hub.values...)
+}
+
 type outboundPairingHubSpy struct {
 	shipapi.HubInterface
 	queuedSKI string
@@ -292,6 +327,43 @@ func (s *ServiceSuite) Test_ManualPairingChangeDuringSetupIsNotLost() {
 	close(release)
 	assert.NoError(s.T(), <-setupDone)
 	assert.NoError(s.T(), <-updateDone)
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
+}
+
+func (s *ServiceSuite) Test_ConcurrentPairingRegistrationPreservesCallOrder() {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	hub := &orderedPairingRegistrationHubSpy{
+		HubInterface:  s.conHub,
+		firstEntered:  firstEntered,
+		secondEntered: make(chan struct{}),
+		releaseFirst:  releaseFirst,
+	}
+	s.sut.connectionsHub = hub
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- s.sut.SetPairingRegistration(true) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		s.T().Fatal("first registration did not reach hub")
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		secondDone <- s.sut.SetPairingRegistration(false)
+	}()
+	<-secondStarted
+
+	select {
+	case <-hub.secondEntered:
+	case <-time.After(time.Second):
+	}
+	close(releaseFirst)
+	assert.NoError(s.T(), <-firstDone)
+	assert.NoError(s.T(), <-secondDone)
 	assert.Equal(s.T(), []bool{true, false}, hub.Values())
 }
 
