@@ -80,6 +80,13 @@ type ServiceInterface interface {
 	UserIsAbleToApproveOrCancelPairingRequests(allow bool)
 }
 
+// OutboundPairingServiceInterface is the optional service capability for
+// locally initiated pairing without granting durable trust.
+type OutboundPairingServiceInterface interface {
+	QueueRemoteSKI(ski string) error
+	ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error
+}
+
 // interface for receiving data for specific events from Service
 //
 // some are passthrough readers, because service needs to coordinate

@@ -62,6 +62,7 @@ type listenerPolicyHub interface {
 }
 
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
+type outboundPairingHub = shipapi.OutboundPairingController
 
 type lifecycleState uint8
 
@@ -186,6 +187,7 @@ func NewServiceWithOptions(
 }
 
 var _ api.ServiceInterface = (*Service)(nil)
+var _ api.OutboundPairingServiceInterface = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
@@ -602,4 +604,36 @@ func (s *Service) SetPairingRegistration(allow bool) error {
 		return errors.New("connections hub does not support pairing registration")
 	}
 	return setter.SetPairingRegistration(allow)
+}
+
+// QueueRemoteSKI admits one remote to the protected outbound pairing path.
+// Durable trust remains owned by RegisterRemoteSKI after OOB confirmation.
+func (s *Service) QueueRemoteSKI(ski string) error {
+	s.lifecycleMux.Lock()
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is unavailable")
+	}
+	controller, ok := hub.(outboundPairingHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support outbound pairing")
+	}
+	return controller.QueueRemoteSKI(ski)
+}
+
+// ReportRemoteEndpoint supplies endpoint evidence for a previously queued or
+// trusted remote without changing its trust state.
+func (s *Service) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
+	s.lifecycleMux.Lock()
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is unavailable")
+	}
+	controller, ok := hub.(outboundPairingHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support outbound pairing")
+	}
+	return controller.ReportRemoteEndpoint(ski, endpoint)
 }
