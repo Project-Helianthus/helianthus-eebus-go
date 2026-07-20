@@ -3,6 +3,7 @@ package service
 import (
 	"crypto/tls"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,13 +39,32 @@ type ServiceSuite struct {
 
 type pairingRegistrationHubSpy struct {
 	shipapi.HubInterface
-	values []bool
-	err    error
+
+	mu        sync.Mutex
+	values    []bool
+	err       error
+	entered   chan struct{}
+	release   <-chan struct{}
+	enterOnce sync.Once
 }
 
 func (hub *pairingRegistrationHubSpy) SetPairingRegistration(value bool) error {
+	if hub.entered != nil {
+		hub.enterOnce.Do(func() { close(hub.entered) })
+	}
+	if hub.release != nil {
+		<-hub.release
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
 	hub.values = append(hub.values, value)
 	return hub.err
+}
+
+func (hub *pairingRegistrationHubSpy) Values() []bool {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return append([]bool(nil), hub.values...)
 }
 
 type outboundPairingHubSpy struct {
@@ -172,11 +192,11 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept
 	s.sut.localService = shipapi.NewServiceDetails("local-ski")
 
 	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
-	assert.Equal(s.T(), []bool{true}, hub.values)
+	assert.Equal(s.T(), []bool{true}, hub.Values())
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 
 	s.sut.UserIsAbleToApproveOrCancelPairingRequests(false)
-	assert.Equal(s.T(), []bool{true, false}, hub.values)
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 }
 
@@ -185,7 +205,8 @@ func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
 	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub, err: wantErr}
 	s.sut.connectionsHub = hub
 
-	err := s.sut.SetPairingRegistration(true)
+	var registration api.PairingRegistrationServiceInterface = s.sut
+	err := registration.SetPairingRegistration(true)
 	assert.ErrorIs(s.T(), err, wantErr)
 }
 
@@ -232,7 +253,46 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
 	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
 	err = s.sut.Setup()
 	assert.NoError(s.T(), err)
-	assert.Equal(s.T(), []bool{true}, hub.values)
+	assert.Equal(s.T(), []bool{true}, hub.Values())
+}
+
+func (s *ServiceSuite) Test_ManualPairingChangeDuringSetupIsNotLost() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	hub := &pairingRegistrationHubSpy{
+		HubInterface: s.conHub,
+		entered:      entered,
+		release:      release,
+	}
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	}
+
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
+	setupDone := make(chan error, 1)
+	go func() { setupDone <- s.sut.Setup() }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		s.T().Fatal("setup did not reach pairing registration")
+	}
+
+	updateDone := make(chan error, 1)
+	go func() { updateDone <- s.sut.SetPairingRegistration(false) }()
+	close(release)
+	assert.NoError(s.T(), <-setupDone)
+	assert.NoError(s.T(), <-updateDone)
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
 }
 
 func (s *ServiceSuite) Test_SetupRejectsHubWithoutPairingRegistration() {
