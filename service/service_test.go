@@ -141,7 +141,7 @@ func (s *ServiceSuite) Test_EEBUSHandler() {
 	detail := &shipapi.ConnectionStateDetail{}
 	s.sut.ServicePairingDetailUpdate(testSki, detail)
 
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
 	result := s.sut.AllowWaitingForTrust(testSki)
 	assert.Equal(s.T(), true, result)
 
@@ -191,11 +191,11 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept
 	s.sut.connectionsHub = hub
 	s.sut.localService = shipapi.NewServiceDetails("local-ski")
 
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
 	assert.Equal(s.T(), []bool{true}, hub.Values())
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(false)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(false))
 	assert.Equal(s.T(), []bool{true, false}, hub.Values())
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 }
@@ -205,7 +205,7 @@ func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
 	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub, err: wantErr}
 	s.sut.connectionsHub = hub
 
-	var registration api.PairingRegistrationServiceInterface = s.sut
+	var registration api.ServiceInterface = s.sut
 	err := registration.SetPairingRegistration(true)
 	assert.ErrorIs(s.T(), err, wantErr)
 }
@@ -250,7 +250,7 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
 		return hub
 	}
 
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
 	err = s.sut.Setup()
 	assert.NoError(s.T(), err)
 	assert.Equal(s.T(), []bool{true}, hub.Values())
@@ -308,7 +308,7 @@ func (s *ServiceSuite) Test_SetupRejectsHubWithoutPairingRegistration() {
 	) shipapi.HubInterface {
 		return s.conHub
 	}
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
 
 	err = s.sut.Setup()
 	assert.EqualError(s.T(), err, "connections hub does not support pairing registration")

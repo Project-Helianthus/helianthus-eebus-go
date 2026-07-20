@@ -70,14 +70,15 @@ type ServiceInterface interface {
 	// user wants to cancel/disallow an incoming pairing request
 	CancelPairingWithSKI(ski string)
 
-	// Define wether the user is able to react to an incoming pairing request
+	// SetPairingRegistration defines whether the user can react to an incoming
+	// pairing request and returns any registration failure.
 	//
 	// Call this with `true` e.g. if the user is currently using a web interface
 	// where an incoming request can be accepted or denied
 	//
 	// Default is set to false, meaning every incoming pairing request will be
 	// automatically denied
-	UserIsAbleToApproveOrCancelPairingRequests(allow bool)
+	SetPairingRegistration(allow bool) error
 }
 
 // OutboundPairingServiceInterface is the optional service capability for

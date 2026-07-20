@@ -354,26 +354,39 @@ func (s *Service) Setup() error {
 			return fmt.Errorf("install outgoing attempt gate: %w", err)
 		}
 	}
-	s.mux.Lock()
-	pairingPossible := s.isPairingPossible
-	s.mux.Unlock()
 	pairingSetter, supportsPairingRegistration := connectionsHub.(pairingRegistrationHub)
-	if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
-		return errors.New("connections hub does not support pairing registration")
-	}
-	if supportsPairingRegistration && !isNilInterface(pairingSetter) {
-		if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
-			return fmt.Errorf("set initial pairing registration: %w", err)
-		}
-	}
+	for {
+		s.mux.Lock()
+		pairingPossible := s.isPairingPossible
+		s.mux.Unlock()
 
-	s.lifecycleMux.Lock()
-	s.localService = localService
-	s.spineLocalDevice = spineLocalDevice
-	s.connectionsHub = connectionsHub
-	s.lifecycle = lifecycleReady
-	setupSucceeded = true
-	s.lifecycleMux.Unlock()
+		if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
+			return errors.New("connections hub does not support pairing registration")
+		}
+		if supportsPairingRegistration && !isNilInterface(pairingSetter) {
+			if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
+				return fmt.Errorf("set initial pairing registration: %w", err)
+			}
+		}
+
+		// Publish only if no concurrent pairing update occurred while the new
+		// hub was being configured. Otherwise apply the latest value and retry.
+		s.lifecycleMux.Lock()
+		s.mux.Lock()
+		if s.isPairingPossible != pairingPossible {
+			s.mux.Unlock()
+			s.lifecycleMux.Unlock()
+			continue
+		}
+		s.localService = localService
+		s.spineLocalDevice = spineLocalDevice
+		s.connectionsHub = connectionsHub
+		s.lifecycle = lifecycleReady
+		setupSucceeded = true
+		s.mux.Unlock()
+		s.lifecycleMux.Unlock()
+		break
+	}
 
 	return nil
 }
@@ -573,28 +586,14 @@ func (s *Service) CancelPairingWithSKI(ski string) {
 	s.connectionsHub.CancelPairingWithSKI(ski)
 }
 
-// Define wether the user is able to react to an incoming pairing request
-//
-// Call this with `true` e.g. if the user is currently using a web interface
-// where an incoming request can be accepted or denied
-//
-// Default is set to false, meaning every incoming pairing request will be
-// automatically denied
-func (s *Service) UserIsAbleToApproveOrCancelPairingRequests(allow bool) {
-	if err := s.SetPairingRegistration(allow); err != nil {
-		logging.Log().Debug("set pairing registration failed", err)
-	}
-}
-
 // SetPairingRegistration controls protected, user-mediated pairing
 // availability without enabling automatic handshake acceptance.
 func (s *Service) SetPairingRegistration(allow bool) error {
+	s.lifecycleMux.Lock()
 	s.mux.Lock()
 	s.isPairingPossible = allow
-	s.mux.Unlock()
-
-	s.lifecycleMux.Lock()
 	hub := s.connectionsHub
+	s.mux.Unlock()
 	s.lifecycleMux.Unlock()
 	if isNilInterface(hub) {
 		return nil
