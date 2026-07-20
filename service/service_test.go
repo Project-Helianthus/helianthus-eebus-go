@@ -35,6 +35,15 @@ type ServiceSuite struct {
 	localDevice   *spinemocks.DeviceLocalInterface
 }
 
+type pairingRegistrationHub struct {
+	shipapi.HubInterface
+	values []bool
+}
+
+func (hub *pairingRegistrationHub) SetPairingRegistration(value bool) {
+	hub.values = append(hub.values, value)
+}
+
 func (s *ServiceSuite) WriteShipMessageWithPayload(message []byte) {}
 
 func (s *ServiceSuite) BeforeTest(suiteName, testName string) {
@@ -134,6 +143,20 @@ func (s *ServiceSuite) Test_ConnectionsHub() {
 
 	s.conHub.EXPECT().DisconnectSKI(mock.Anything, mock.Anything).Return()
 	s.sut.DisconnectSKI(testSki, "reason")
+}
+
+func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept() {
+	hub := &pairingRegistrationHub{HubInterface: s.conHub}
+	s.sut.connectionsHub = hub
+	s.sut.localService = shipapi.NewServiceDetails("local-ski")
+
+	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.Equal(s.T(), []bool{true}, hub.values)
+	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
+
+	s.sut.UserIsAbleToApproveOrCancelPairingRequests(false)
+	assert.Equal(s.T(), []bool{true, false}, hub.values)
+	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 }
 
 func (s *ServiceSuite) Test_SetLogging() {
