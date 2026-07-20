@@ -61,9 +61,7 @@ type listenerPolicyHub interface {
 	StartWithPolicy() error
 }
 
-type pairingRegistrationHub interface {
-	SetPairingRegistration(bool)
-}
+type pairingRegistrationHub = shipapi.PairingRegistrationSetter
 
 type lifecycleState uint8
 
@@ -354,6 +352,18 @@ func (s *Service) Setup() error {
 			return fmt.Errorf("install outgoing attempt gate: %w", err)
 		}
 	}
+	s.mux.Lock()
+	pairingPossible := s.isPairingPossible
+	s.mux.Unlock()
+	pairingSetter, supportsPairingRegistration := connectionsHub.(pairingRegistrationHub)
+	if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
+		return errors.New("connections hub does not support pairing registration")
+	}
+	if supportsPairingRegistration && !isNilInterface(pairingSetter) {
+		if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
+			return fmt.Errorf("set initial pairing registration: %w", err)
+		}
+	}
 
 	s.lifecycleMux.Lock()
 	s.localService = localService
@@ -569,11 +579,27 @@ func (s *Service) CancelPairingWithSKI(ski string) {
 // Default is set to false, meaning every incoming pairing request will be
 // automatically denied
 func (s *Service) UserIsAbleToApproveOrCancelPairingRequests(allow bool) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-
-	s.isPairingPossible = allow
-	if hub, ok := s.connectionsHub.(pairingRegistrationHub); ok {
-		hub.SetPairingRegistration(allow)
+	if err := s.SetPairingRegistration(allow); err != nil {
+		logging.Log().Debug("set pairing registration failed", err)
 	}
+}
+
+// SetPairingRegistration controls protected, user-mediated pairing
+// availability without enabling automatic handshake acceptance.
+func (s *Service) SetPairingRegistration(allow bool) error {
+	s.mux.Lock()
+	s.isPairingPossible = allow
+	s.mux.Unlock()
+
+	s.lifecycleMux.Lock()
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return nil
+	}
+	setter, ok := hub.(pairingRegistrationHub)
+	if !ok || isNilInterface(setter) {
+		return errors.New("connections hub does not support pairing registration")
+	}
+	return setter.SetPairingRegistration(allow)
 }

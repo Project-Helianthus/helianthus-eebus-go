@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/tls"
+	"errors"
 	"testing"
 	"time"
 
@@ -161,6 +162,15 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 }
 
+func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
+	wantErr := errors.New("announce failed")
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub, err: wantErr}
+	s.sut.connectionsHub = hub
+
+	err := s.sut.SetPairingRegistration(true)
+	assert.ErrorIs(s.T(), err, wantErr)
+}
+
 func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
 	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
 	assert.NoError(s.T(), err)
@@ -196,6 +206,7 @@ func (s *ServiceSuite) Test_SetupRejectsHubWithoutPairingRegistration() {
 	) shipapi.HubInterface {
 		return s.conHub
 	}
+	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
 
 	err = s.sut.Setup()
 	assert.EqualError(s.T(), err, "connections hub does not support pairing registration")
