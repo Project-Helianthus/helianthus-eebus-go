@@ -38,10 +38,12 @@ type ServiceSuite struct {
 type pairingRegistrationHubSpy struct {
 	shipapi.HubInterface
 	values []bool
+	err    error
 }
 
-func (hub *pairingRegistrationHubSpy) SetPairingRegistration(value bool) {
+func (hub *pairingRegistrationHubSpy) SetPairingRegistration(value bool) error {
 	hub.values = append(hub.values, value)
+	return hub.err
 }
 
 func (s *ServiceSuite) WriteShipMessageWithPayload(message []byte) {}
@@ -157,6 +159,46 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept
 	s.sut.UserIsAbleToApproveOrCancelPairingRequests(false)
 	assert.Equal(s.T(), []bool{true, false}, hub.values)
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
+}
+
+func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub}
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	}
+
+	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	err = s.sut.Setup()
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), []bool{true}, hub.values)
+}
+
+func (s *ServiceSuite) Test_SetupRejectsHubWithoutPairingRegistration() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return s.conHub
+	}
+
+	err = s.sut.Setup()
+	assert.EqualError(s.T(), err, "connections hub does not support pairing registration")
 }
 
 func (s *ServiceSuite) Test_SetLogging() {
