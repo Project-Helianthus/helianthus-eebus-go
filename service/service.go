@@ -61,6 +61,10 @@ type listenerPolicyHub interface {
 	StartWithPolicy() error
 }
 
+type pairingRegistrationHub interface {
+	SetPairingRegistration(bool)
+}
+
 type lifecycleState uint8
 
 const (
@@ -569,4 +573,7 @@ func (s *Service) UserIsAbleToApproveOrCancelPairingRequests(allow bool) {
 	defer s.mux.Unlock()
 
 	s.isPairingPossible = allow
+	if hub, ok := s.connectionsHub.(pairingRegistrationHub); ok {
+		hub.SetPairingRegistration(allow)
+	}
 }

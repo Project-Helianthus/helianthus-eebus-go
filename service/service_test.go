@@ -35,12 +35,12 @@ type ServiceSuite struct {
 	localDevice   *spinemocks.DeviceLocalInterface
 }
 
-type pairingRegistrationHub struct {
+type pairingRegistrationHubSpy struct {
 	shipapi.HubInterface
 	values []bool
 }
 
-func (hub *pairingRegistrationHub) SetPairingRegistration(value bool) {
+func (hub *pairingRegistrationHubSpy) SetPairingRegistration(value bool) {
 	hub.values = append(hub.values, value)
 }
 
@@ -146,7 +146,7 @@ func (s *ServiceSuite) Test_ConnectionsHub() {
 }
 
 func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept() {
-	hub := &pairingRegistrationHub{HubInterface: s.conHub}
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub}
 	s.sut.connectionsHub = hub
 	s.sut.localService = shipapi.NewServiceDetails("local-ski")
 
