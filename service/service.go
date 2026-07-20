@@ -61,6 +61,9 @@ type listenerPolicyHub interface {
 	StartWithPolicy() error
 }
 
+type pairingRegistrationHub = shipapi.PairingRegistrationSetter
+type outboundPairingHub = shipapi.OutboundPairingController
+
 type lifecycleState uint8
 
 const (
@@ -134,8 +137,9 @@ type Service struct {
 	connectionsHubFactory       connectionsHubFactory
 	scopedConnectionsHubFactory scopedConnectionsHubFactory
 
-	lifecycleMux sync.Mutex
-	lifecycle    lifecycleState
+	pairingRegistrationMux sync.Mutex
+	lifecycleMux           sync.Mutex
+	lifecycle              lifecycleState
 
 	mux sync.Mutex
 }
@@ -184,6 +188,7 @@ func NewServiceWithOptions(
 }
 
 var _ api.ServiceInterface = (*Service)(nil)
+var _ api.OutboundPairingServiceInterface = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
@@ -350,6 +355,22 @@ func (s *Service) Setup() error {
 			return fmt.Errorf("install outgoing attempt gate: %w", err)
 		}
 	}
+	pairingSetter, supportsPairingRegistration := connectionsHub.(pairingRegistrationHub)
+	s.pairingRegistrationMux.Lock()
+	s.mux.Lock()
+	pairingPossible := s.isPairingPossible
+	s.mux.Unlock()
+
+	if pairingPossible && (!supportsPairingRegistration || isNilInterface(pairingSetter)) {
+		s.pairingRegistrationMux.Unlock()
+		return errors.New("connections hub does not support pairing registration")
+	}
+	if supportsPairingRegistration && !isNilInterface(pairingSetter) {
+		if err := pairingSetter.SetPairingRegistration(pairingPossible); err != nil {
+			s.pairingRegistrationMux.Unlock()
+			return fmt.Errorf("set initial pairing registration: %w", err)
+		}
+	}
 
 	s.lifecycleMux.Lock()
 	s.localService = localService
@@ -358,6 +379,7 @@ func (s *Service) Setup() error {
 	s.lifecycle = lifecycleReady
 	setupSucceeded = true
 	s.lifecycleMux.Unlock()
+	s.pairingRegistrationMux.Unlock()
 
 	return nil
 }
@@ -557,16 +579,56 @@ func (s *Service) CancelPairingWithSKI(ski string) {
 	s.connectionsHub.CancelPairingWithSKI(ski)
 }
 
-// Define wether the user is able to react to an incoming pairing request
-//
-// Call this with `true` e.g. if the user is currently using a web interface
-// where an incoming request can be accepted or denied
-//
-// Default is set to false, meaning every incoming pairing request will be
-// automatically denied
-func (s *Service) UserIsAbleToApproveOrCancelPairingRequests(allow bool) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
+// SetPairingRegistration controls protected, user-mediated pairing
+// availability without enabling automatic handshake acceptance.
+func (s *Service) SetPairingRegistration(allow bool) error {
+	s.pairingRegistrationMux.Lock()
+	defer s.pairingRegistrationMux.Unlock()
 
+	s.lifecycleMux.Lock()
+	s.mux.Lock()
 	s.isPairingPossible = allow
+	hub := s.connectionsHub
+	s.mux.Unlock()
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return nil
+	}
+	setter, ok := hub.(pairingRegistrationHub)
+	if !ok || isNilInterface(setter) {
+		return errors.New("connections hub does not support pairing registration")
+	}
+	return setter.SetPairingRegistration(allow)
+}
+
+// QueueRemoteSKI admits one remote to the protected outbound pairing path.
+// Durable trust remains owned by RegisterRemoteSKI after OOB confirmation.
+func (s *Service) QueueRemoteSKI(ski string) error {
+	s.lifecycleMux.Lock()
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is unavailable")
+	}
+	controller, ok := hub.(outboundPairingHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support outbound pairing")
+	}
+	return controller.QueueRemoteSKI(ski)
+}
+
+// ReportRemoteEndpoint supplies endpoint evidence for a previously queued or
+// trusted remote without changing its trust state.
+func (s *Service) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
+	s.lifecycleMux.Lock()
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is unavailable")
+	}
+	controller, ok := hub.(outboundPairingHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support outbound pairing")
+	}
+	return controller.ReportRemoteEndpoint(ski, endpoint)
 }

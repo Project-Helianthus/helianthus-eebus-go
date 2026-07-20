@@ -2,6 +2,8 @@ package service
 
 import (
 	"crypto/tls"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +35,89 @@ type ServiceSuite struct {
 	conHub        *shipmocks.HubInterface
 	logging       *shipmocks.LoggingInterface
 	localDevice   *spinemocks.DeviceLocalInterface
+}
+
+type pairingRegistrationHubSpy struct {
+	shipapi.HubInterface
+
+	mu        sync.Mutex
+	values    []bool
+	err       error
+	entered   chan struct{}
+	release   <-chan struct{}
+	enterOnce sync.Once
+}
+
+func (hub *pairingRegistrationHubSpy) SetPairingRegistration(value bool) error {
+	if hub.entered != nil {
+		hub.enterOnce.Do(func() { close(hub.entered) })
+	}
+	if hub.release != nil {
+		<-hub.release
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	hub.values = append(hub.values, value)
+	return hub.err
+}
+
+func (hub *pairingRegistrationHubSpy) Values() []bool {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return append([]bool(nil), hub.values...)
+}
+
+type orderedPairingRegistrationHubSpy struct {
+	shipapi.HubInterface
+
+	mu            sync.Mutex
+	calls         int
+	values        []bool
+	firstEntered  chan struct{}
+	secondEntered chan struct{}
+	releaseFirst  <-chan struct{}
+}
+
+func (hub *orderedPairingRegistrationHubSpy) SetPairingRegistration(value bool) error {
+	hub.mu.Lock()
+	hub.calls++
+	call := hub.calls
+	hub.mu.Unlock()
+
+	if call == 1 {
+		close(hub.firstEntered)
+		<-hub.releaseFirst
+	} else if call == 2 {
+		close(hub.secondEntered)
+	}
+	hub.mu.Lock()
+	hub.values = append(hub.values, value)
+	hub.mu.Unlock()
+	return nil
+}
+
+func (hub *orderedPairingRegistrationHubSpy) Values() []bool {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return append([]bool(nil), hub.values...)
+}
+
+type outboundPairingHubSpy struct {
+	shipapi.HubInterface
+	queuedSKI string
+	reported  string
+	endpoint  shipapi.RemoteEndpoint
+}
+
+func (hub *outboundPairingHubSpy) QueueRemoteSKI(ski string) error {
+	hub.queuedSKI = ski
+	return nil
+}
+
+func (hub *outboundPairingHubSpy) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
+	hub.reported = ski
+	hub.endpoint = endpoint
+	return nil
 }
 
 func (s *ServiceSuite) WriteShipMessageWithPayload(message []byte) {}
@@ -91,7 +176,7 @@ func (s *ServiceSuite) Test_EEBUSHandler() {
 	detail := &shipapi.ConnectionStateDetail{}
 	s.sut.ServicePairingDetailUpdate(testSki, detail)
 
-	s.sut.UserIsAbleToApproveOrCancelPairingRequests(true)
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
 	result := s.sut.AllowWaitingForTrust(testSki)
 	assert.Equal(s.T(), true, result)
 
@@ -134,6 +219,171 @@ func (s *ServiceSuite) Test_ConnectionsHub() {
 
 	s.conHub.EXPECT().DisconnectSKI(mock.Anything, mock.Anything).Return()
 	s.sut.DisconnectSKI(testSki, "reason")
+}
+
+func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept() {
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub}
+	s.sut.connectionsHub = hub
+	s.sut.localService = shipapi.NewServiceDetails("local-ski")
+
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
+	assert.Equal(s.T(), []bool{true}, hub.Values())
+	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
+
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(false))
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
+	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
+}
+
+func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
+	wantErr := errors.New("announce failed")
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub, err: wantErr}
+	s.sut.connectionsHub = hub
+
+	var registration api.ServiceInterface = s.sut
+	err := registration.SetPairingRegistration(true)
+	assert.ErrorIs(s.T(), err, wantErr)
+}
+
+func (s *ServiceSuite) Test_OutboundPairingDelegatesToOptionalHubCapability() {
+	const remoteSKI = "0123456789abcdef0123456789abcdef01234567"
+	endpoint := shipapi.RemoteEndpoint{Host: "192.0.2.21", Port: 54321, Path: "/ship/"}
+	hub := &outboundPairingHubSpy{HubInterface: s.conHub}
+	s.sut.connectionsHub = hub
+
+	assert.NoError(s.T(), s.sut.QueueRemoteSKI(remoteSKI))
+	assert.NoError(s.T(), s.sut.ReportRemoteEndpoint(remoteSKI, endpoint))
+	assert.Equal(s.T(), remoteSKI, hub.queuedSKI)
+	assert.Equal(s.T(), remoteSKI, hub.reported)
+	assert.Equal(s.T(), endpoint, hub.endpoint)
+	var _ api.OutboundPairingServiceInterface = s.sut
+}
+
+func (s *ServiceSuite) Test_OutboundPairingRejectsHubWithoutOptionalCapability() {
+	s.sut.connectionsHub = s.conHub
+
+	assert.Error(s.T(), s.sut.QueueRemoteSKI("0123456789abcdef0123456789abcdef01234567"))
+	assert.Error(s.T(), s.sut.ReportRemoteEndpoint(
+		"0123456789abcdef0123456789abcdef01234567",
+		shipapi.RemoteEndpoint{Host: "192.0.2.21", Port: 54321, Path: "/ship/"},
+	))
+}
+
+func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub}
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	}
+
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
+	err = s.sut.Setup()
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), []bool{true}, hub.Values())
+}
+
+func (s *ServiceSuite) Test_ManualPairingChangeDuringSetupIsNotLost() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	hub := &pairingRegistrationHubSpy{
+		HubInterface: s.conHub,
+		entered:      entered,
+		release:      release,
+	}
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	}
+
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
+	setupDone := make(chan error, 1)
+	go func() { setupDone <- s.sut.Setup() }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		s.T().Fatal("setup did not reach pairing registration")
+	}
+
+	updateDone := make(chan error, 1)
+	go func() { updateDone <- s.sut.SetPairingRegistration(false) }()
+	close(release)
+	assert.NoError(s.T(), <-setupDone)
+	assert.NoError(s.T(), <-updateDone)
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
+}
+
+func (s *ServiceSuite) Test_ConcurrentPairingRegistrationPreservesCallOrder() {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	hub := &orderedPairingRegistrationHubSpy{
+		HubInterface:  s.conHub,
+		firstEntered:  firstEntered,
+		secondEntered: make(chan struct{}),
+		releaseFirst:  releaseFirst,
+	}
+	s.sut.connectionsHub = hub
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- s.sut.SetPairingRegistration(true) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		s.T().Fatal("first registration did not reach hub")
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		secondDone <- s.sut.SetPairingRegistration(false)
+	}()
+	<-secondStarted
+
+	select {
+	case <-hub.secondEntered:
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(releaseFirst)
+	assert.NoError(s.T(), <-firstDone)
+	assert.NoError(s.T(), <-secondDone)
+	assert.Equal(s.T(), []bool{true, false}, hub.Values())
+}
+
+func (s *ServiceSuite) Test_SetupRejectsHubWithoutPairingRegistration() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return s.conHub
+	}
+	assert.NoError(s.T(), s.sut.SetPairingRegistration(true))
+
+	err = s.sut.Setup()
+	assert.EqualError(s.T(), err, "connections hub does not support pairing registration")
 }
 
 func (s *ServiceSuite) Test_SetLogging() {

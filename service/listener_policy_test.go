@@ -169,7 +169,7 @@ func TestDiscoveryPolicyIsIndependentFromPairingAndListenerStartup(t *testing.T)
 			sut := NewServiceWithOptions(configuration, &legacyServiceReaderRecorder{}, ServiceOptions{
 				ListenerPolicy: &policy,
 			})
-			sut.UserIsAbleToApproveOrCancelPairingRequests(test.pairing)
+			require.NoError(t, sut.SetPairingRegistration(test.pairing))
 			require.NoError(t, sut.Setup())
 			t.Cleanup(sut.Shutdown)
 

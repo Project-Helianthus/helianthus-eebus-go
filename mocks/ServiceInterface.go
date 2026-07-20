@@ -649,35 +649,48 @@ func (_c *ServiceInterface_UnregisterRemoteSKI_Call) RunAndReturn(run func(strin
 	return _c
 }
 
-// UserIsAbleToApproveOrCancelPairingRequests provides a mock function with given fields: allow
-func (_m *ServiceInterface) UserIsAbleToApproveOrCancelPairingRequests(allow bool) {
-	_m.Called(allow)
+// SetPairingRegistration provides a mock function with given fields: allow
+func (_m *ServiceInterface) SetPairingRegistration(allow bool) error {
+	ret := _m.Called(allow)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetPairingRegistration")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(bool) error); ok {
+		r0 = rf(allow)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
 }
 
-// ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UserIsAbleToApproveOrCancelPairingRequests'
-type ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call struct {
+// ServiceInterface_SetPairingRegistration_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetPairingRegistration'
+type ServiceInterface_SetPairingRegistration_Call struct {
 	*mock.Call
 }
 
-// UserIsAbleToApproveOrCancelPairingRequests is a helper method to define mock.On call
+// SetPairingRegistration is a helper method to define mock.On call
 //   - allow bool
-func (_e *ServiceInterface_Expecter) UserIsAbleToApproveOrCancelPairingRequests(allow interface{}) *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call {
-	return &ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call{Call: _e.mock.On("UserIsAbleToApproveOrCancelPairingRequests", allow)}
+func (_e *ServiceInterface_Expecter) SetPairingRegistration(allow interface{}) *ServiceInterface_SetPairingRegistration_Call {
+	return &ServiceInterface_SetPairingRegistration_Call{Call: _e.mock.On("SetPairingRegistration", allow)}
 }
 
-func (_c *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call) Run(run func(allow bool)) *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call {
+func (_c *ServiceInterface_SetPairingRegistration_Call) Run(run func(allow bool)) *ServiceInterface_SetPairingRegistration_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(bool))
 	})
 	return _c
 }
 
-func (_c *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call) Return() *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call {
-	_c.Call.Return()
+func (_c *ServiceInterface_SetPairingRegistration_Call) Return(_a0 error) *ServiceInterface_SetPairingRegistration_Call {
+	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call) RunAndReturn(run func(bool)) *ServiceInterface_UserIsAbleToApproveOrCancelPairingRequests_Call {
+func (_c *ServiceInterface_SetPairingRegistration_Call) RunAndReturn(run func(bool) error) *ServiceInterface_SetPairingRegistration_Call {
 	_c.Call.Return(run)
 	return _c
 }
