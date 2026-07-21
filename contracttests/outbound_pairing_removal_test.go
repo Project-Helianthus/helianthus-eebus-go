@@ -19,50 +19,74 @@ import (
 
 const shipPackagePrefix = "github.com/Project-Helianthus/helianthus-ship-go"
 
-var exportedAPITypeAllowlist = map[string]string{
-	"Configuration":                          "struct",
-	"DeviceClassificationClientInterface":    "interface",
-	"DeviceClassificationCommonInterface":    "interface",
-	"DeviceClassificationServerInterface":    "interface",
-	"DeviceConfigurationClientInterface":     "interface",
-	"DeviceConfigurationCommonInterface":     "interface",
-	"DeviceConfigurationServerInterface":     "interface",
-	"DeviceDiagnosisClientInterface":         "interface",
-	"DeviceDiagnosisCommonInterface":         "interface",
-	"DeviceDiagnosisServerInterface":         "interface",
-	"ElectricalConnectionClientInterface":    "interface",
-	"ElectricalConnectionCommonInterface":    "interface",
-	"ElectricalConnectionServerInterface":    "interface",
-	"EntityEventCallback":                    "signature",
-	"EventType":                              "basic",
-	"FeatureClientInterface":                 "interface",
-	"FeatureServerInterface":                 "interface",
-	"IdentificationClientInterface":          "interface",
-	"IdentificationCommonInterface":          "interface",
-	"IdentificationServerInterface":          "interface",
-	"IncentiveTableClientInterface":          "interface",
-	"IncentiveTableCommonInterface":          "interface",
-	"IncentiveTableServerInterface":          "interface",
-	"LoadControlClientInterface":             "interface",
-	"LoadControlCommonInterface":             "interface",
-	"LoadControlServerInterface":             "interface",
-	"ManufacturerData":                       "struct",
-	"MeasurementClientInterface":             "interface",
-	"MeasurementCommonInterface":             "interface",
-	"MeasurementServerInterface":             "interface",
-	"RemoteEntityScenarios":                  "struct",
-	"ServiceInterface":                       "interface",
-	"ServiceReaderInterface":                 "interface",
-	"SmartEnergyManagementPsClientInterface": "interface",
-	"SmartEnergyManagementPsCommonInterface": "interface",
-	"SmartEnergyManagementPsServerInterface": "interface",
-	"TimeSeriesClientInterface":              "interface",
-	"TimeSeriesCommonInterface":              "interface",
-	"TimeSeriesServerInterface":              "interface",
-	"UseCaseBaseInterface":                   "interface",
-	"UseCaseInterface":                       "interface",
-	"UseCaseScenario":                        "struct",
+var apiPackageObjectAllowlist = map[string]string{
+	"Configuration":                          "type:struct",
+	"DeviceClassificationClientInterface":    "type:interface",
+	"DeviceClassificationCommonInterface":    "type:interface",
+	"DeviceClassificationServerInterface":    "type:interface",
+	"DeviceConfigurationClientInterface":     "type:interface",
+	"DeviceConfigurationCommonInterface":     "type:interface",
+	"DeviceConfigurationServerInterface":     "type:interface",
+	"DeviceDiagnosisClientInterface":         "type:interface",
+	"DeviceDiagnosisCommonInterface":         "type:interface",
+	"DeviceDiagnosisServerInterface":         "type:interface",
+	"ElectricalConnectionClientInterface":    "type:interface",
+	"ElectricalConnectionCommonInterface":    "type:interface",
+	"ElectricalConnectionServerInterface":    "type:interface",
+	"EntityEventCallback":                    "type:signature",
+	"ErrDataForMetadataKeyNotFound":          "var",
+	"ErrDataNotAvailable":                    "var",
+	"ErrDeviceDisconnected":                  "var",
+	"ErrEntityNotFound":                      "var",
+	"ErrFunctionNotSupported":                "var",
+	"ErrMetadataNotAvailable":                "var",
+	"ErrMissingData":                         "var",
+	"ErrNoCompatibleEntity":                  "var",
+	"ErrNotSupported":                        "var",
+	"ErrOperationOnFunctionNotSupported":     "var",
+	"ErrUsecCaseNotSupported":                "var",
+	"EventType":                              "type:basic",
+	"FeatureClientInterface":                 "type:interface",
+	"FeatureServerInterface":                 "type:interface",
+	"IdentificationClientInterface":          "type:interface",
+	"IdentificationCommonInterface":          "type:interface",
+	"IdentificationServerInterface":          "type:interface",
+	"IncentiveTableClientInterface":          "type:interface",
+	"IncentiveTableCommonInterface":          "type:interface",
+	"IncentiveTableServerInterface":          "type:interface",
+	"LoadControlClientInterface":             "type:interface",
+	"LoadControlCommonInterface":             "type:interface",
+	"LoadControlServerInterface":             "type:interface",
+	"ManufacturerData":                       "type:struct",
+	"MeasurementClientInterface":             "type:interface",
+	"MeasurementCommonInterface":             "type:interface",
+	"MeasurementServerInterface":             "type:interface",
+	"NewConfiguration":                       "func",
+	"RemoteEntityScenarios":                  "type:struct",
+	"ServiceInterface":                       "type:interface",
+	"ServiceReaderInterface":                 "type:interface",
+	"SmartEnergyManagementPsClientInterface": "type:interface",
+	"SmartEnergyManagementPsCommonInterface": "type:interface",
+	"SmartEnergyManagementPsServerInterface": "type:interface",
+	"TimeSeriesClientInterface":              "type:interface",
+	"TimeSeriesCommonInterface":              "type:interface",
+	"TimeSeriesServerInterface":              "type:interface",
+	"UseCaseBaseInterface":                   "type:interface",
+	"UseCaseInterface":                       "type:interface",
+	"UseCaseScenario":                        "type:struct",
 }
+
+var servicePackageObjectAllowlist = map[string]string{
+	"ListenerPolicy":                      "type:struct",
+	"NewService":                          "func",
+	"NewServiceWithOptions":               "func",
+	"NewServiceWithOutgoingAttemptBridge": "func",
+	"OutgoingAttemptBridgeConfiguration":  "type:struct",
+	"Service":                             "type:struct",
+	"ServiceOptions":                      "type:struct",
+}
+
+var fixtureServicePackageObjectAllowlist = map[string]string{"Service": "type:struct"}
 
 var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 	"ServiceInterface": stringSet(
@@ -140,6 +164,7 @@ func TestOutboundPairingRemovalUsesTypedAPISurface(t *testing.T) {
 	violations = append(violations, apiSurfaceViolations(loaded[canonicalModule+"/api"])...)
 	violations = append(violations, serviceSurfaceViolations(
 		loaded[canonicalModule+"/service"],
+		servicePackageObjectAllowlist,
 		serviceMethodAllowlist,
 		serviceCapabilityTypeAllowlist,
 	)...)
@@ -181,9 +206,27 @@ func (s *Service) PairCandidate(remote string) {
 	s.hub.RegisterRemoteSKI(remote)
 }
 `, imports)
-		violations := serviceSurfaceViolations(fixture, stringSet("Setup"), nil)
+		violations := serviceSurfaceViolations(fixture, fixtureServicePackageObjectAllowlist, stringSet("Setup"), nil)
 		assertViolationContains(t, violations, "unexpected Service method PairCandidate")
 		assertViolationContains(t, violations, "forwards to SHIP pairing/discovery method RegisterRemoteSKI")
+	})
+
+	t.Run("renamed package-level pairing forwarder", func(t *testing.T) {
+		fixture := checkFixturePackage(t, canonicalModule+"/service", `
+package service
+
+import shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+
+type Service struct{}
+
+func (s *Service) Setup() {}
+
+func PairCandidate(hub shipapi.HubInterface, remote string) {
+	hub.RegisterRemoteSKI(remote)
+}
+`, imports)
+		violations := serviceSurfaceViolations(fixture, fixtureServicePackageObjectAllowlist, stringSet("Setup"), nil)
+		assertViolationContains(t, violations, "unexpected exported service package object PairCandidate (func)")
 	})
 
 	t.Run("local capability alias and forwarder", func(t *testing.T) {
@@ -204,7 +247,7 @@ func (s *Service) relayDiscovery(entry shipapi.MdnsEntry) {
 	s.discovery.ReportMdnsEntry(entry)
 }
 `, imports)
-		violations := serviceSurfaceViolations(fixture, stringSet("Setup"), nil)
+		violations := serviceSurfaceViolations(fixture, fixtureServicePackageObjectAllowlist, stringSet("Setup"), nil)
 		assertViolationContains(t, violations, "local capability interface localDiscovery")
 		assertViolationContains(t, violations, "unexpected Service method relayDiscovery")
 		assertViolationContains(t, violations, "forwards to SHIP pairing/discovery method ReportMdnsEntry")
@@ -312,16 +355,11 @@ func packageExportLookup(root string) importer.Lookup {
 }
 
 func apiSurfaceViolations(view *typedPackage) []string {
-	actual := make(map[string]string)
-	for _, name := range view.pkg.Scope().Names() {
-		object, ok := view.pkg.Scope().Lookup(name).(*types.TypeName)
-		if !ok || !object.Exported() {
-			continue
-		}
-		actual[name] = typeKind(object)
-	}
-
-	violations := compareStringMaps("exported api type", actual, exportedAPITypeAllowlist)
+	violations := compareStringMaps(
+		"exported api package object",
+		exportedPackageObjects(view.pkg),
+		apiPackageObjectAllowlist,
+	)
 	for typeName, allowlist := range apiInterfaceMethodAllowlists {
 		object, ok := view.pkg.Scope().Lookup(typeName).(*types.TypeName)
 		if !ok {
@@ -337,14 +375,23 @@ func apiSurfaceViolations(view *typedPackage) []string {
 	return violations
 }
 
-func serviceSurfaceViolations(view *typedPackage, methodAllowlist, capabilityAllowlist map[string]struct{}) []string {
+func serviceSurfaceViolations(
+	view *typedPackage,
+	packageAllowlist map[string]string,
+	methodAllowlist, capabilityAllowlist map[string]struct{},
+) []string {
+	violations := compareStringMaps(
+		"exported service package object",
+		exportedPackageObjects(view.pkg),
+		packageAllowlist,
+	)
 	serviceObject, ok := view.pkg.Scope().Lookup("Service").(*types.TypeName)
 	if !ok {
-		return []string{"missing service.Service type"}
+		return append(violations, "missing service.Service type")
 	}
 
 	actualMethods := methodNames(types.NewPointer(types.Unalias(serviceObject.Type()).(*types.Named)))
-	violations := compareStringSets("Service method", actualMethods, methodAllowlist)
+	violations = append(violations, compareStringSets("Service method", actualMethods, methodAllowlist)...)
 
 	for _, name := range view.pkg.Scope().Names() {
 		object, ok := view.pkg.Scope().Lookup(name).(*types.TypeName)
@@ -379,6 +426,29 @@ func serviceSurfaceViolations(view *typedPackage, methodAllowlist, capabilityAll
 		}
 	}
 	return violations
+}
+
+func exportedPackageObjects(pkg *types.Package) map[string]string {
+	result := make(map[string]string)
+	for _, name := range pkg.Scope().Names() {
+		object := pkg.Scope().Lookup(name)
+		if !object.Exported() {
+			continue
+		}
+		switch typed := object.(type) {
+		case *types.TypeName:
+			result[name] = "type:" + typeKind(typed)
+		case *types.Func:
+			result[name] = "func"
+		case *types.Var:
+			result[name] = "var"
+		case *types.Const:
+			result[name] = "const"
+		default:
+			result[name] = fmt.Sprintf("%T", object)
+		}
+	}
+	return result
 }
 
 type serviceMethodDeclaration struct {
