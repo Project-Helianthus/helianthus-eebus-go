@@ -14,11 +14,11 @@ import (
 
 const (
 	scopedListenerShipModule         = "github.com/Project-Helianthus/helianthus-ship-go"
-	scopedListenerShipVersion        = "v0.6.1-helianthus.4"
+	scopedListenerShipVersion        = "v0.6.1-helianthus.5"
 	scopedListenerShipRepository     = "https://github.com/Project-Helianthus/helianthus-ship-go.git"
-	scopedListenerShipTagObject      = "d1a3853f4231a867a1a1e6555ae9948d631e07a7"
-	scopedListenerShipCommit         = "f568b527fde31b13d24c7f4a0a6c3646ce189baa"
-	scopedListenerShipTree           = "5bcdfcee089c09eb96108ebb402ef4c5b4dbfa8d"
+	scopedListenerShipTagObject      = "5597f62174f0f2368afb842def3feacb8f08a847"
+	scopedListenerShipCommit         = "ca4c6368fa4e887a85ff252467df43e62cb33372"
+	scopedListenerShipTree           = "1903559bac61654f0a131cfb5ad53cba420f0ec4"
 	scopedListenerShipManifestSHA256 = "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
 	scopedListenerShipLicenseSHA256  = "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
 )
