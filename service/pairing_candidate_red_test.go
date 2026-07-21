@@ -8,16 +8,24 @@ import (
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
-const pairingCandidateFacadeTestSKI = "b1b7197b064084e4cfef2365105d8d36ff185e5b"
+const (
+	pairingCandidateFacadeTestRef = "shipc_observation-generation-17"
+	pairingCandidateFacadeTestSKI = "b1b7197b064084e4cfef2365105d8d36ff185e5b"
+)
+
+type pairingCandidateCall struct {
+	ref string
+	ski string
+}
 
 type pairingCandidateHubSpy struct {
 	shipapi.HubInterface
 	err   error
-	calls []string
+	calls []pairingCandidateCall
 }
 
-func (hub *pairingCandidateHubSpy) QueuePairingCandidate(ski string) error {
-	hub.calls = append(hub.calls, ski)
+func (hub *pairingCandidateHubSpy) QueuePairingCandidate(candidateRef, expectedSKI string) error {
+	hub.calls = append(hub.calls, pairingCandidateCall{ref: candidateRef, ski: expectedSKI})
 	return hub.err
 }
 
@@ -25,15 +33,16 @@ func TestServiceExposesOptionalPairingCandidateQueue(t *testing.T) {
 	var _ eebusapi.PairingCandidateQueuer = (*Service)(nil)
 }
 
-func TestServiceForwardsPairingCandidateSKIExactlyOnce(t *testing.T) {
+func TestServiceForwardsPairingCandidateReferenceAndExpectedSKIExactlyOnce(t *testing.T) {
 	hub := &pairingCandidateHubSpy{}
 	service := &Service{connectionsHub: hub}
 
-	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestSKI); err != nil {
+	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestRef, pairingCandidateFacadeTestSKI); err != nil {
 		t.Fatalf("queue pairing candidate: %v", err)
 	}
-	if len(hub.calls) != 1 || hub.calls[0] != pairingCandidateFacadeTestSKI {
-		t.Fatalf("pairing candidate calls = %v, want [%s]", hub.calls, pairingCandidateFacadeTestSKI)
+	want := pairingCandidateCall{ref: pairingCandidateFacadeTestRef, ski: pairingCandidateFacadeTestSKI}
+	if len(hub.calls) != 1 || hub.calls[0] != want {
+		t.Fatalf("pairing candidate calls = %v, want [%+v]", hub.calls, want)
 	}
 }
 
@@ -42,14 +51,14 @@ func TestServicePropagatesPairingCandidateFailure(t *testing.T) {
 	hub := &pairingCandidateHubSpy{err: wantErr}
 	service := &Service{connectionsHub: hub}
 
-	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestSKI); !errors.Is(err, wantErr) {
+	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestRef, pairingCandidateFacadeTestSKI); !errors.Is(err, wantErr) {
 		t.Fatalf("queue error = %v, want %v", err, wantErr)
 	}
 }
 
 func TestServiceRejectsHubWithoutPairingCandidateCapability(t *testing.T) {
 	service := &Service{connectionsHub: &hubRuntimeRecorder{}}
-	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestSKI); err == nil {
+	if err := service.QueuePairingCandidate(pairingCandidateFacadeTestRef, pairingCandidateFacadeTestSKI); err == nil {
 		t.Fatal("hub without pairing candidate capability was accepted")
 	}
 }
