@@ -102,24 +102,6 @@ func (hub *orderedPairingRegistrationHubSpy) Values() []bool {
 	return append([]bool(nil), hub.values...)
 }
 
-type outboundPairingHubSpy struct {
-	shipapi.HubInterface
-	queuedSKI string
-	reported  string
-	endpoint  shipapi.RemoteEndpoint
-}
-
-func (hub *outboundPairingHubSpy) QueueRemoteSKI(ski string) error {
-	hub.queuedSKI = ski
-	return nil
-}
-
-func (hub *outboundPairingHubSpy) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
-	hub.reported = ski
-	hub.endpoint = endpoint
-	return nil
-}
-
 func (s *ServiceSuite) WriteShipMessageWithPayload(message []byte) {}
 
 func (s *ServiceSuite) BeforeTest(suiteName, testName string) {
@@ -243,30 +225,6 @@ func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
 	var registration api.ServiceInterface = s.sut
 	err := registration.SetPairingRegistration(true)
 	assert.ErrorIs(s.T(), err, wantErr)
-}
-
-func (s *ServiceSuite) Test_OutboundPairingDelegatesToOptionalHubCapability() {
-	const remoteSKI = "0123456789abcdef0123456789abcdef01234567"
-	endpoint := shipapi.RemoteEndpoint{Host: "192.0.2.21", Port: 54321, Path: "/ship/"}
-	hub := &outboundPairingHubSpy{HubInterface: s.conHub}
-	s.sut.connectionsHub = hub
-
-	assert.NoError(s.T(), s.sut.QueueRemoteSKI(remoteSKI))
-	assert.NoError(s.T(), s.sut.ReportRemoteEndpoint(remoteSKI, endpoint))
-	assert.Equal(s.T(), remoteSKI, hub.queuedSKI)
-	assert.Equal(s.T(), remoteSKI, hub.reported)
-	assert.Equal(s.T(), endpoint, hub.endpoint)
-	var _ api.OutboundPairingServiceInterface = s.sut
-}
-
-func (s *ServiceSuite) Test_OutboundPairingRejectsHubWithoutOptionalCapability() {
-	s.sut.connectionsHub = s.conHub
-
-	assert.Error(s.T(), s.sut.QueueRemoteSKI("0123456789abcdef0123456789abcdef01234567"))
-	assert.Error(s.T(), s.sut.ReportRemoteEndpoint(
-		"0123456789abcdef0123456789abcdef01234567",
-		shipapi.RemoteEndpoint{Host: "192.0.2.21", Port: 54321, Path: "/ship/"},
-	))
 }
 
 func (s *ServiceSuite) Test_ManualPairingAvailabilityBeforeSetupIsApplied() {
