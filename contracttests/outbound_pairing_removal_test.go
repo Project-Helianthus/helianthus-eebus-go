@@ -62,6 +62,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"MeasurementCommonInterface":             "type:interface",
 	"MeasurementServerInterface":             "type:interface",
 	"NewConfiguration":                       "func",
+	"PairingCandidateQueuer":                 "type:interface",
 	"RemoteEntityScenarios":                  "type:struct",
 	"ServiceInterface":                       "type:interface",
 	"ServiceReaderInterface":                 "type:interface",
@@ -89,6 +90,9 @@ var servicePackageObjectAllowlist = map[string]string{
 var fixtureServicePackageObjectAllowlist = map[string]string{"Service": "type:struct"}
 
 var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
+	"PairingCandidateQueuer": stringSet(
+		"QueuePairingCandidate",
+	),
 	"ServiceInterface": stringSet(
 		"AddUseCase",
 		"CancelPairingWithSKI",
@@ -129,6 +133,7 @@ var serviceMethodAllowlist = stringSet(
 	"OutgoingAttemptConnectionClosed",
 	"OutgoingAttemptHandshakeStateUpdate",
 	"PairingDetailForSki",
+	"QueuePairingCandidate",
 	"RegisterRemoteSKI",
 	"RemoteSKIConnected",
 	"RemoteSKIDisconnected",
@@ -149,6 +154,7 @@ var serviceMethodAllowlist = stringSet(
 
 var serviceCapabilityTypeAllowlist = stringSet(
 	"listenerPolicyHub",
+	"pairingCandidateHub",
 	"pairingRegistrationHub",
 )
 

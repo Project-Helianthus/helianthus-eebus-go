@@ -23,13 +23,13 @@ const (
 	canonicalModule   = "github.com/Project-Helianthus/helianthus-eebus-go"
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
-	canonicalShipVer  = "v0.6.1-helianthus.5"
+	canonicalShipVer  = "v0.6.1-helianthus.6"
 	canonicalSpineVer = "v0.7.1-helianthus.1"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "e9450e71f48f9746519cdc369a92c5a015e4c6438126746628f89516ee3c5548"
+	productionHash    = "e3621292456651d70236c1656cb2b6d69991508ad5434181973a8d8021b818eb"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -177,7 +177,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-eebus-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.4"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.5"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/eebus-go.git"},
 		{"upstream.ref", manifest.Upstream.Ref, "refs/tags/v0.7.0"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
@@ -201,7 +201,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	for _, dependency := range []struct {
 		name, module, version, tag, commit, tree, manifestDigest string
 	}{
-		{"ship", canonicalShip, canonicalShipVer, "5597f62174f0f2368afb842def3feacb8f08a847", "ca4c6368fa4e887a85ff252467df43e62cb33372", "1903559bac61654f0a131cfb5ad53cba420f0ec4", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+		{"ship", canonicalShip, canonicalShipVer, "bbf9f5b3066c809862ed8e22f2d0181a69e665c0", "e2c6b90be115caca887687ce2f7abb6d1f3301dc", "549b0252410034b9cec79eab53a528acb1741654", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
 		{"spine", canonicalSpine, canonicalSpineVer, "2722d31718aa89b1d31faf16b5c14bbee692e2de", "c85a449cc44c7e1fd2a44f8b10724d81e89bb260", "02236304d8c74914a701be3896eaaf94be32e2d6", "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"},
 	} {
 		var reviewed *struct {

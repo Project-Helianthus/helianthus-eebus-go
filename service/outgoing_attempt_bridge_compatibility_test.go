@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ go 1.22.0
 require github.com/Project-Helianthus/helianthus-eebus-go v0.0.0
 
 replace github.com/Project-Helianthus/helianthus-eebus-go => %s
-`, filepath.ToSlash(moduleRoot))
+`, strconv.Quote(filepath.ToSlash(moduleRoot)))
 	require.NoError(t, os.WriteFile(filepath.Join(fixtureRoot, "go.mod"), []byte(goMod), 0o600))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(fixtureRoot, "compatibility_test.go"),
@@ -103,6 +104,7 @@ var additiveConstructor func(
 ) *service.Service = service.NewServiceWithOutgoingAttemptBridge
 
 var _ api.ServiceInterface = (*service.Service)(nil)
+var _ api.PairingCandidateQueuer = (*service.Service)(nil)
 var _ api.ServiceReaderInterface = (*legacyReader)(nil)
 var _ shipapi.OutgoingAttemptGate = (*gate)(nil)
 var _ shipapi.OutgoingAttemptHubReaderInterface = (*sink)(nil)

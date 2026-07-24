@@ -62,6 +62,9 @@ type listenerPolicyHub interface {
 }
 
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
+type pairingCandidateHub = shipapi.PairingCandidateQueuer
+
+var errPairingCandidateServiceTerminal = errors.New("pairing candidate queue is unavailable after service shutdown")
 
 type lifecycleState uint8
 
@@ -187,6 +190,7 @@ func NewServiceWithOptions(
 }
 
 var _ api.ServiceInterface = (*Service)(nil)
+var _ api.PairingCandidateQueuer = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
@@ -597,4 +601,25 @@ func (s *Service) SetPairingRegistration(allow bool) error {
 		return errors.New("connections hub does not support pairing registration")
 	}
 	return setter.SetPairingRegistration(allow)
+}
+
+// QueuePairingCandidate forwards one opaque discovery capability and the SKI
+// validated by the operator. Endpoint selection remains internal to SHIP.
+func (s *Service) QueuePairingCandidate(candidateRef, expectedSKI string) error {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errPairingCandidateServiceTerminal
+	}
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is not ready")
+	}
+	queuer, ok := hub.(pairingCandidateHub)
+	if !ok || isNilInterface(queuer) {
+		return errors.New("connections hub does not support pairing candidate queue")
+	}
+	return queuer.QueuePairingCandidate(candidateRef, expectedSKI)
 }
