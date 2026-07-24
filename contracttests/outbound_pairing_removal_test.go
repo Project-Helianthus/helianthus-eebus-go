@@ -62,6 +62,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"MeasurementCommonInterface":             "type:interface",
 	"MeasurementServerInterface":             "type:interface",
 	"NewConfiguration":                       "func",
+	"PairingCandidateReader":                 "type:interface",
 	"PairingCandidateQueuer":                 "type:interface",
 	"RemoteEntityScenarios":                  "type:struct",
 	"ServiceInterface":                       "type:interface",
@@ -92,6 +93,9 @@ var fixtureServicePackageObjectAllowlist = map[string]string{"Service": "type:st
 var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 	"PairingCandidateQueuer": stringSet(
 		"QueuePairingCandidate",
+	),
+	"PairingCandidateReader": stringSet(
+		"VisiblePairingCandidatesUpdated",
 	),
 	"ServiceInterface": stringSet(
 		"AddUseCase",
@@ -150,6 +154,7 @@ var serviceMethodAllowlist = stringSet(
 	"StartWithPolicy",
 	"UnregisterRemoteSKI",
 	"VisibleRemoteServicesUpdated",
+	"VisiblePairingCandidatesUpdated",
 )
 
 var serviceCapabilityTypeAllowlist = stringSet(
@@ -177,6 +182,56 @@ func TestOutboundPairingRemovalUsesTypedAPISurface(t *testing.T) {
 	if len(violations) != 0 {
 		sort.Strings(violations)
 		t.Fatalf("typed outbound pairing API guard failed:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func TestPairingCandidateReaderEndpointRedactedFieldSetIsSupplyChainFrozen(t *testing.T) {
+	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
+	reader, ok := view.pkg.Scope().Lookup("PairingCandidateReader").(*types.TypeName)
+	if !ok {
+		t.Fatal("missing api PairingCandidateReader")
+	}
+
+	method := types.NewMethodSet(reader.Type()).Lookup(view.pkg, "VisiblePairingCandidatesUpdated")
+	if method == nil {
+		t.Fatal("missing PairingCandidateReader.VisiblePairingCandidatesUpdated")
+	}
+	signature, ok := method.Obj().Type().(*types.Signature)
+	if !ok || signature.Params().Len() != 2 || signature.Results().Len() != 0 {
+		t.Fatalf("PairingCandidateReader callback signature = %s, want two inputs and no outputs", method.Obj().Type())
+	}
+	if !types.Identical(signature.Params().At(0).Type(), view.pkg.Scope().Lookup("ServiceInterface").Type()) {
+		t.Fatalf("PairingCandidateReader first input = %s, want api.ServiceInterface", signature.Params().At(0).Type())
+	}
+
+	candidates, ok := types.Unalias(signature.Params().At(1).Type()).(*types.Slice)
+	if !ok {
+		t.Fatalf("PairingCandidateReader second input = %s, want []shipapi.PairingCandidateRef", signature.Params().At(1).Type())
+	}
+	candidateRef, ok := types.Unalias(candidates.Elem()).(*types.Named)
+	if !ok || candidateRef.Obj().Pkg() == nil || candidateRef.Obj().Pkg().Path() != shipPackagePrefix+"/api" || candidateRef.Obj().Name() != "PairingCandidateRef" {
+		t.Fatalf("PairingCandidateReader element = %s, want shipapi.PairingCandidateRef", candidates.Elem())
+	}
+
+	fields, ok := candidateRef.Underlying().(*types.Struct)
+	if !ok {
+		t.Fatalf("PairingCandidateRef underlying type = %T, want struct", candidateRef.Underlying())
+	}
+	actual := make(map[string]struct{}, fields.NumFields())
+	for index := 0; index < fields.NumFields(); index++ {
+		field := fields.Field(index)
+		if field.Type() != types.Typ[types.String] {
+			t.Fatalf("PairingCandidateRef field %s type = %s, want string", field.Name(), field.Type())
+		}
+		actual[field.Name()] = struct{}{}
+	}
+	// This exact allowlist is a supply-chain anti-leak gate. Identity fields are
+	// untrusted discovery claims; forbidding additions prevents endpoint, path,
+	// address, or port material from silently entering this dependency contract.
+	if violations := compareStringSets("PairingCandidateRef field", actual, stringSet(
+		"CandidateRef", "Name", "SKI", "Identifier", "Brand", "Type", "Model",
+	)); len(violations) != 0 {
+		t.Fatalf("PairingCandidateRef field freeze failed:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

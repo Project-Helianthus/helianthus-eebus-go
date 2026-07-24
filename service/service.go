@@ -142,6 +142,11 @@ type Service struct {
 	pairingRegistrationMux sync.Mutex
 	lifecycleMux           sync.Mutex
 	lifecycle              lifecycleState
+	candidateVisibilityMux sync.Mutex
+	candidateVisibility    []pairingCandidateVisibilityEvent
+	candidateDispatching   bool
+	candidateClosed        bool
+	candidateTerminal      bool
 
 	mux sync.Mutex
 }
@@ -489,9 +494,11 @@ func (s *Service) Shutdown() {
 	}
 	hub := s.connectionsHub
 	s.lifecycle = lifecycleStopping
+	closePairingCandidateVisibilityAdmissions(s)
 	s.lifecycleMux.Unlock()
 
 	hub.Shutdown()
+	emitTerminalPairingCandidateVisibility(s)
 
 	s.lifecycleMux.Lock()
 	s.lifecycle = lifecycleStopped
