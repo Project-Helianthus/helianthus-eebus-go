@@ -64,6 +64,8 @@ type listenerPolicyHub interface {
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
 type pairingCandidateHub = shipapi.PairingCandidateQueuer
 
+var errPairingCandidateServiceTerminal = errors.New("pairing candidate queue is unavailable after service shutdown")
+
 type lifecycleState uint8
 
 const (
@@ -605,6 +607,11 @@ func (s *Service) SetPairingRegistration(allow bool) error {
 // validated by the operator. Endpoint selection remains internal to SHIP.
 func (s *Service) QueuePairingCandidate(candidateRef, expectedSKI string) error {
 	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errPairingCandidateServiceTerminal
+	}
 	hub := s.connectionsHub
 	s.lifecycleMux.Unlock()
 	if isNilInterface(hub) {
