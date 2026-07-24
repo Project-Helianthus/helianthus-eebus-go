@@ -89,6 +89,14 @@ type PairingCandidateQueuer interface {
 	QueuePairingCandidate(candidateRef, expectedSKI string) error
 }
 
+// PairingCandidateReader is an experimental internal dependency-fork callback
+// for current SHIP pairing candidate references. It is intentionally separate
+// from ServiceReaderInterface and is not a stable Helianthus, MCP, or GraphQL
+// API.
+type PairingCandidateReader interface {
+	VisiblePairingCandidatesUpdated(service ServiceInterface, candidates []shipapi.PairingCandidateRef)
+}
+
 // interface for receiving data for specific events from Service
 //
 // some are passthrough readers, because service needs to coordinate

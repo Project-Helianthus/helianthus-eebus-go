@@ -1,12 +1,16 @@
 package service
 
 import (
+	"sort"
+
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 var _ shipapi.HubReaderInterface = (*Service)(nil)
 var _ shipapi.OutgoingAttemptHubReaderInterface = (*Service)(nil)
+var _ shipapi.PairingCandidateHubReaderInterface = (*Service)(nil)
 
 // report a connection to a SKI
 func (s *Service) RemoteSKIConnected(ski string) {
@@ -30,6 +34,41 @@ func (s *Service) SetupRemoteDevice(ski string, writeI shipapi.ShipConnectionDat
 // report all currently visible EEBUS services
 func (s *Service) VisibleRemoteServicesUpdated(entries []shipapi.RemoteService) {
 	s.serviceHandler.VisibleRemoteServicesUpdated(s, entries)
+}
+
+// VisiblePairingCandidatesUpdated forwards only opaque, process-local SHIP
+// candidate references to an optional experimental reader.
+func (s *Service) VisiblePairingCandidatesUpdated(candidates []shipapi.PairingCandidateRef) {
+	reader, ok := s.serviceHandler.(api.PairingCandidateReader)
+	if !ok || isNilInterface(reader) {
+		return
+	}
+	reader.VisiblePairingCandidatesUpdated(s, cloneAndSortPairingCandidateRefs(candidates))
+}
+
+func cloneAndSortPairingCandidateRefs(candidates []shipapi.PairingCandidateRef) []shipapi.PairingCandidateRef {
+	cloned := append([]shipapi.PairingCandidateRef(nil), candidates...)
+	sort.Slice(cloned, func(left, right int) bool {
+		return pairingCandidateRefLess(cloned[left], cloned[right])
+	})
+	return cloned
+}
+
+func pairingCandidateRefLess(left, right shipapi.PairingCandidateRef) bool {
+	for _, values := range [][2]string{
+		{left.SKI, right.SKI},
+		{left.CandidateRef, right.CandidateRef},
+		{left.Name, right.Name},
+		{left.Identifier, right.Identifier},
+		{left.Brand, right.Brand},
+		{left.Type, right.Type},
+		{left.Model, right.Model},
+	} {
+		if values[0] != values[1] {
+			return values[0] < values[1]
+		}
+	}
+	return false
 }
 
 // Provides the SHIP ID the remote service reported during the handshake process
