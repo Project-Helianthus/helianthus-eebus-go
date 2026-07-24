@@ -81,6 +81,14 @@ type ServiceInterface interface {
 	SetPairingRegistration(allow bool) error
 }
 
+// PairingCandidateQueuer is an experimental dependency-fork capability for
+// selecting one exact, currently visible SHIP discovery observation after
+// out-of-band SKI validation. It is intentionally separate from the stable
+// ServiceInterface and is not a stable Helianthus consumer API.
+type PairingCandidateQueuer interface {
+	QueuePairingCandidate(candidateRef, expectedSKI string) error
+}
+
 // interface for receiving data for specific events from Service
 //
 // some are passthrough readers, because service needs to coordinate
