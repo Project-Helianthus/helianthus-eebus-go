@@ -62,6 +62,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"MeasurementCommonInterface":             "type:interface",
 	"MeasurementServerInterface":             "type:interface",
 	"NewConfiguration":                       "func",
+	"PairingCandidateReader":                 "type:interface",
 	"PairingCandidateQueuer":                 "type:interface",
 	"RemoteEntityScenarios":                  "type:struct",
 	"ServiceInterface":                       "type:interface",
@@ -92,6 +93,9 @@ var fixtureServicePackageObjectAllowlist = map[string]string{"Service": "type:st
 var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 	"PairingCandidateQueuer": stringSet(
 		"QueuePairingCandidate",
+	),
+	"PairingCandidateReader": stringSet(
+		"VisiblePairingCandidatesUpdated",
 	),
 	"ServiceInterface": stringSet(
 		"AddUseCase",
@@ -150,6 +154,7 @@ var serviceMethodAllowlist = stringSet(
 	"StartWithPolicy",
 	"UnregisterRemoteSKI",
 	"VisibleRemoteServicesUpdated",
+	"VisiblePairingCandidatesUpdated",
 )
 
 var serviceCapabilityTypeAllowlist = stringSet(
