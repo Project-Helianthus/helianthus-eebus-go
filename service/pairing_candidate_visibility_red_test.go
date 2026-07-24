@@ -151,7 +151,7 @@ func TestServiceForwardsCandidateVisibilityAcrossLifecycleStates(t *testing.T) {
 	}
 }
 
-func TestServiceForwardsConcurrentCandidateVisibility(t *testing.T) {
+func TestServiceCoalescesConcurrentCandidateVisibilityAndConverges(t *testing.T) {
 	reader := &concurrentPairingCandidateVisibilityReader{}
 	service := &Service{serviceHandler: reader}
 	const callbacks = 32
@@ -168,8 +168,20 @@ func TestServiceForwardsConcurrentCandidateVisibility(t *testing.T) {
 	close(start)
 	wait.Wait()
 
-	if reader.count() != callbacks {
-		t.Fatalf("callbacks = %d, want %d", reader.count(), callbacks)
+	concurrentSnapshots := reader.snapshot()
+	if len(concurrentSnapshots) == 0 || len(concurrentSnapshots) > callbacks {
+		t.Fatalf("concurrent callbacks = %d, want between 1 and %d", len(concurrentSnapshots), callbacks)
+	}
+	for index, candidates := range concurrentSnapshots {
+		if len(candidates) != 1 || candidates[0].CandidateRef != "candidate" {
+			t.Fatalf("concurrent snapshot %d = %#v, want one complete candidate", index, candidates)
+		}
+	}
+
+	service.VisiblePairingCandidatesUpdated(candidateVisibilitySnapshot("latest"))
+	snapshots := reader.snapshot()
+	if got := candidateVisibilityLabel(snapshots[len(snapshots)-1]); got != "latest" {
+		t.Fatalf("final candidate snapshot = %q, want latest", got)
 	}
 }
 
@@ -233,10 +245,10 @@ func (reader *concurrentPairingCandidateVisibilityReader) VisiblePairingCandidat
 	reader.snapshots = append(reader.snapshots, candidates)
 }
 
-func (reader *concurrentPairingCandidateVisibilityReader) count() int {
+func (reader *concurrentPairingCandidateVisibilityReader) snapshot() [][]shipapi.PairingCandidateRef {
 	reader.mux.Lock()
 	defer reader.mux.Unlock()
-	return len(reader.snapshots)
+	return append([][]shipapi.PairingCandidateRef(nil), reader.snapshots...)
 }
 
 type reentrantPairingCandidateVisibilityReader struct {

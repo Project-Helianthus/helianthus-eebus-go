@@ -43,7 +43,98 @@ func (s *Service) VisiblePairingCandidatesUpdated(candidates []shipapi.PairingCa
 	if !ok || isNilInterface(reader) {
 		return
 	}
-	reader.VisiblePairingCandidatesUpdated(s, cloneAndSortPairingCandidateRefs(candidates))
+	dispatchPairingCandidateVisibility(s, reader, cloneAndSortPairingCandidateRefs(candidates))
+}
+
+type pairingCandidateVisibilityEvent struct {
+	reader     api.PairingCandidateReader
+	candidates []shipapi.PairingCandidateRef
+	done       chan struct{}
+}
+
+func dispatchPairingCandidateVisibility(
+	service *Service,
+	reader api.PairingCandidateReader,
+	candidates []shipapi.PairingCandidateRef,
+) {
+	service.candidateVisibilityMux.Lock()
+	if service.candidateClosed {
+		service.candidateVisibilityMux.Unlock()
+		return
+	}
+	event := pairingCandidateVisibilityEvent{
+		reader:     reader,
+		candidates: candidates,
+	}
+	if pending := len(service.candidateVisibility); pending > 0 &&
+		service.candidateVisibility[pending-1].done == nil {
+		service.candidateVisibility[pending-1] = event
+	} else {
+		service.candidateVisibility = append(service.candidateVisibility, event)
+	}
+	if service.candidateDispatching {
+		service.candidateVisibilityMux.Unlock()
+		return
+	}
+	service.candidateDispatching = true
+	service.candidateVisibilityMux.Unlock()
+	drainPairingCandidateVisibility(service)
+}
+
+func closePairingCandidateVisibilityAdmissions(service *Service) {
+	service.candidateVisibilityMux.Lock()
+	service.candidateClosed = true
+	service.candidateVisibilityMux.Unlock()
+}
+
+func emitTerminalPairingCandidateVisibility(service *Service) {
+	reader, ok := service.serviceHandler.(api.PairingCandidateReader)
+	if !ok || isNilInterface(reader) {
+		return
+	}
+
+	done := make(chan struct{})
+	service.candidateVisibilityMux.Lock()
+	if service.candidateTerminal {
+		service.candidateVisibilityMux.Unlock()
+		return
+	}
+	service.candidateTerminal = true
+	service.candidateVisibility = append(service.candidateVisibility, pairingCandidateVisibilityEvent{
+		reader:     reader,
+		candidates: []shipapi.PairingCandidateRef{},
+		done:       done,
+	})
+	shouldDrain := !service.candidateDispatching
+	if shouldDrain {
+		service.candidateDispatching = true
+	}
+	service.candidateVisibilityMux.Unlock()
+
+	if shouldDrain {
+		drainPairingCandidateVisibility(service)
+		<-done
+	}
+}
+
+func drainPairingCandidateVisibility(service *Service) {
+	for {
+		service.candidateVisibilityMux.Lock()
+		if len(service.candidateVisibility) == 0 {
+			service.candidateDispatching = false
+			service.candidateVisibilityMux.Unlock()
+			return
+		}
+		event := service.candidateVisibility[0]
+		service.candidateVisibility[0] = pairingCandidateVisibilityEvent{}
+		service.candidateVisibility = service.candidateVisibility[1:]
+		service.candidateVisibilityMux.Unlock()
+
+		event.reader.VisiblePairingCandidatesUpdated(service, event.candidates)
+		if event.done != nil {
+			close(event.done)
+		}
+	}
 }
 
 func cloneAndSortPairingCandidateRefs(candidates []shipapi.PairingCandidateRef) []shipapi.PairingCandidateRef {

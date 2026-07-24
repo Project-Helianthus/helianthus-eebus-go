@@ -185,7 +185,7 @@ func TestOutboundPairingRemovalUsesTypedAPISurface(t *testing.T) {
 	}
 }
 
-func TestPairingCandidateReaderIsExactlyRedactedAndFrozen(t *testing.T) {
+func TestPairingCandidateReaderEndpointRedactedFieldSetIsSupplyChainFrozen(t *testing.T) {
 	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
 	reader, ok := view.pkg.Scope().Lookup("PairingCandidateReader").(*types.TypeName)
 	if !ok {
@@ -225,6 +225,9 @@ func TestPairingCandidateReaderIsExactlyRedactedAndFrozen(t *testing.T) {
 		}
 		actual[field.Name()] = struct{}{}
 	}
+	// This exact allowlist is a supply-chain anti-leak gate. Identity fields are
+	// untrusted discovery claims; forbidding additions prevents endpoint, path,
+	// address, or port material from silently entering this dependency contract.
 	if violations := compareStringSets("PairingCandidateRef field", actual, stringSet(
 		"CandidateRef", "Name", "SKI", "Identifier", "Brand", "Type", "Model",
 	)); len(violations) != 0 {

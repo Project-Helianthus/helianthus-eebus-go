@@ -29,7 +29,7 @@ const (
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "bf7cbcab783f8ca2962729e7c986992f5366951f8e55b3ff907bba0990c6a0c4"
+	productionHash    = "6d424ece0ca028d70a15c20bb6b5e5001ddc1ff1d133a22d79986698b9c6f912"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {

@@ -90,9 +90,11 @@ type PairingCandidateQueuer interface {
 }
 
 // PairingCandidateReader is an experimental internal dependency-fork callback
-// for current SHIP pairing candidate references. It is intentionally separate
-// from ServiceReaderInterface and is not a stable Helianthus, MCP, or GraphQL
-// API.
+// for endpoint-redacted SHIP pairing candidate references. Discovery identity
+// fields remain untrusted peer claims. The owner must not forward these values
+// into Runtime, Snapshot, PairingState, MCP, GraphQL, Portal, or Home Assistant.
+// This contract is separate from ServiceReaderInterface and is not a stable
+// Helianthus product API.
 type PairingCandidateReader interface {
 	VisiblePairingCandidatesUpdated(service ServiceInterface, candidates []shipapi.PairingCandidateRef)
 }
