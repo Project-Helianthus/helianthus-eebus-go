@@ -23,7 +23,7 @@ const (
 	canonicalModule   = "github.com/Project-Helianthus/helianthus-eebus-go"
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
-	canonicalShipVer  = "v0.6.1-helianthus.8"
+	canonicalShipVer  = "v0.6.1-helianthus.9"
 	canonicalSpineVer = "v0.7.1-helianthus.1"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
@@ -177,7 +177,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-eebus-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.8"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.9"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/eebus-go.git"},
 		{"upstream.ref", manifest.Upstream.Ref, "refs/tags/v0.7.0"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
@@ -201,7 +201,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	for _, dependency := range []struct {
 		name, module, version, tag, commit, tree, manifestDigest string
 	}{
-		{"ship", canonicalShip, canonicalShipVer, "d82eca9a87e5340cd83fcdf6b2a3049239c5533b", "c4c452b2fddb49030eef30215f20edd60f32735e", "8cc8892a60fe945521112823ea93721ca7f808e4", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+		{"ship", canonicalShip, canonicalShipVer, "707a075de4ee1148f38e6fe1e6e101f73747c1df", "cfb9e17c3e045b2a53bd39afef2d33cd38326bc5", "4d300074668be337fbe39453f1183ef36ff547c6", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
 		{"spine", canonicalSpine, canonicalSpineVer, "2722d31718aa89b1d31faf16b5c14bbee692e2de", "c85a449cc44c7e1fd2a44f8b10724d81e89bb260", "02236304d8c74914a701be3896eaaf94be32e2d6", "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"},
 	} {
 		var reviewed *struct {
