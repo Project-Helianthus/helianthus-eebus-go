@@ -654,7 +654,50 @@ func TestExactFeatureExecutorRejectsReplacementAndStaleGenerationWithoutSend(t *
 	}
 }
 
-func TestExactFeatureExecutorUsesResolvedCapabilityAcrossSenderReplacement(t *testing.T) {
+func TestExactFeatureExecutorRejectsSubstitutedCapabilityWithoutSend(t *testing.T) {
+	fixture := newExecutorFixture(t, true, false, func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return readReply(request, 61), nil
+	})
+	substitutedSender := &roundTripSender{roundTrip: func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return readReply(request, 62), nil
+	}}
+	resolver := exactRemotePeerResolverFunc(func(
+		model.AddressDeviceType,
+	) (ExactRemotePeer, error) {
+		return ExactRemotePeer{
+			Device:               fixture.remote,
+			RoundTripper:         substitutedSender,
+			RemoteIdentity:       testRemoteIdentity,
+			ConnectionGeneration: testConnectionGen,
+		}, nil
+	})
+
+	_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if !errors.Is(err, ErrExactRemoteBindingMismatch) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrExactRemoteBindingMismatch)
+	}
+	var bindingError *ExactRemoteBindingError
+	if !errors.As(err, &bindingError) {
+		t.Fatalf("Execute() error type = %T, want *ExactRemoteBindingError", err)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("current RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+	}
+	if substitutedSender.calls.Load() != 0 {
+		t.Fatalf("substituted RoundTrip() calls = %d, want 0", substitutedSender.calls.Load())
+	}
+}
+
+func TestExactFeatureExecutorRejectsChangeBetweenResolveAndDispatchWithoutSend(t *testing.T) {
 	fixture := newExecutorFixture(t, true, false, func(
 		_ context.Context,
 		request spineapi.CorrelatedRequest,
@@ -682,12 +725,16 @@ func TestExactFeatureExecutorUsesResolvedCapabilityAcrossSenderReplacement(t *te
 		}, nil
 	})
 
-	result, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
 		context.Background(),
 		fixture.request,
 	)
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	if !errors.Is(err, ErrExactRemoteBindingMismatch) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrExactRemoteBindingMismatch)
+	}
+	var bindingError *ExactRemoteBindingError
+	if !errors.As(err, &bindingError) {
+		t.Fatalf("Execute() error type = %T, want *ExactRemoteBindingError", err)
 	}
 	if !remote.replaced.Load() {
 		t.Fatal("test did not replace Device.Sender() after resolution")
@@ -695,14 +742,11 @@ func TestExactFeatureExecutorUsesResolvedCapabilityAcrossSenderReplacement(t *te
 	if remote.senderCalls.Load() != 0 {
 		t.Fatalf("resolved Device.Sender() calls = %d, want 0", remote.senderCalls.Load())
 	}
-	if fixture.sender.calls.Load() != 1 {
-		t.Fatalf("resolved capability RoundTrip() calls = %d, want 1", fixture.sender.calls.Load())
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("resolved capability RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
 	}
 	if replacementSender.calls.Load() != 0 {
 		t.Fatalf("replacement RoundTrip() calls = %d, want 0", replacementSender.calls.Load())
-	}
-	if result.CorrelationKey != 61 {
-		t.Fatalf("correlation key = %d, want resolved capability reply 61", result.CorrelationKey)
 	}
 }
 
