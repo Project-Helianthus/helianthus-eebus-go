@@ -251,8 +251,10 @@ func TestExactFeatureExecutorFullRead(t *testing.T) {
 }
 
 func TestExactFeatureExecutorFullWrite(t *testing.T) {
+	extension := "opaque-write-extension"
 	writeCmd := model.CmdType{
-		MeasurementListData: &model.MeasurementListDataType{},
+		MeasurementListData:           &model.MeasurementListDataType{},
+		ManufacturerSpecificExtension: &extension,
 	}
 	fixture := newExecutorFixture(t, false, true, func(
 		_ context.Context,
@@ -284,6 +286,32 @@ func TestExactFeatureExecutorFullWrite(t *testing.T) {
 	}
 	if result.Response.ResultData == nil {
 		t.Fatal("result did not preserve the typed result command")
+	}
+	if result.Request.ManufacturerSpecificExtension != &extension {
+		t.Fatal("result did not preserve the opaque typed request extension")
+	}
+}
+
+func TestExactFeatureExecutorPreservesReadReplyExtension(t *testing.T) {
+	extension := "opaque-read-extension"
+	fixture := newExecutorFixture(t, true, false, func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		response := readReply(request, 53)
+		response.Cmd.ManufacturerSpecificExtension = &extension
+		return response, nil
+	})
+
+	result, err := NewExactFeatureExecutor(fixture.local).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Response.ManufacturerSpecificExtension != &extension {
+		t.Fatal("result did not preserve the opaque typed response extension")
 	}
 }
 
@@ -913,6 +941,128 @@ func TestExactFeatureExecutorRejectsCallFunctionUnderWrite(t *testing.T) {
 	)
 	if !errors.Is(err, ErrExactOperationNotSupported) {
 		t.Fatalf("Execute() error = %v, want %v", err, ErrExactOperationNotSupported)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+	}
+}
+
+func TestExactFeatureExecutorRejectsCrossFamilyWrite(t *testing.T) {
+	fixture := newExecutorFixture(t, false, true, func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return writeResult(request, 1), nil
+	})
+	function := model.FunctionTypeLoadControlLimitListData
+	fixture.remoteFeature.SetOperations([]model.FunctionPropertyType{{
+		Function: &function,
+		PossibleOperations: &model.PossibleOperationsType{
+			Write: &model.PossibleOperationsWriteType{},
+		},
+	}})
+	fixture.request.Target.Function = function
+	fixture.request.Operation = ExactFeatureOperationWrite
+	fixture.request.Commands = []model.CmdType{{
+		LoadControlLimitListData: &model.LoadControlLimitListDataType{},
+	}}
+
+	_, err := NewExactFeatureExecutor(fixture.local).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if !errors.Is(err, ErrExactFunctionDataUnavailable) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrExactFunctionDataUnavailable)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+	}
+}
+
+func TestExactFeatureExecutorRejectsMixedWriteResult(t *testing.T) {
+	measurementFunction := model.FunctionTypeMeasurementListData
+	partial := model.ElementTagType{}
+	tests := []struct {
+		name   string
+		mutate func(*model.CmdType)
+	}{
+		{
+			name: "typed data",
+			mutate: func(command *model.CmdType) {
+				command.MeasurementListData = &model.MeasurementListDataType{}
+			},
+		},
+		{
+			name: "function",
+			mutate: func(command *model.CmdType) {
+				command.Function = &measurementFunction
+			},
+		},
+		{
+			name: "filter",
+			mutate: func(command *model.CmdType) {
+				command.Filter = []model.FilterType{{
+					CmdControl: &model.CmdControlType{Partial: &partial},
+				}}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newExecutorFixture(t, false, true, func(
+				_ context.Context,
+				request spineapi.CorrelatedRequest,
+			) (spineapi.CorrelatedResponse, error) {
+				response := writeResult(request, 54)
+				test.mutate(&response.Cmd)
+				return response, nil
+			})
+			fixture.request.Operation = ExactFeatureOperationWrite
+			fixture.request.Commands = []model.CmdType{{
+				MeasurementListData: &model.MeasurementListDataType{},
+			}}
+
+			result, err := NewExactFeatureExecutor(fixture.local).Execute(
+				context.Background(),
+				fixture.request,
+			)
+			if !errors.Is(err, ErrMalformedExactResponse) {
+				t.Fatalf("Execute() error = %v, want %v", err, ErrMalformedExactResponse)
+			}
+			if result.ProtocolError == nil {
+				t.Fatal("mixed result did not return a typed protocol error")
+			}
+			if fixture.sender.calls.Load() != 1 {
+				t.Fatalf("RoundTrip() calls = %d, want 1", fixture.sender.calls.Load())
+			}
+		})
+	}
+}
+
+func TestExactFeatureExecutorFactoryOmissionIsZeroContact(t *testing.T) {
+	fixture := newRoleFixture(
+		t,
+		model.FeatureTypeTypeNodeManagement,
+		model.RoleTypeSpecial,
+		model.FeatureTypeTypeNodeManagement,
+		model.RoleTypeSpecial,
+	)
+	function := model.FunctionTypeNodeManagementSubscriptionData
+	fixture.remoteFeature.SetOperations([]model.FunctionPropertyType{{
+		Function: &function,
+		PossibleOperations: &model.PossibleOperationsType{
+			Read: &model.PossibleOperationsReadType{},
+		},
+	}})
+	fixture.request.Target.Function = function
+
+	_, err := NewExactFeatureExecutor(fixture.local).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if !errors.Is(err, ErrExactFunctionDataUnavailable) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrExactFunctionDataUnavailable)
 	}
 	if fixture.sender.calls.Load() != 0 {
 		t.Fatalf("RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())

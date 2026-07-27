@@ -63,10 +63,21 @@ func (e *ExactFeatureExecutor) Execute(
 	if err := requireDeclaredOperation(feature, request.Target.Function, request.Operation); err != nil {
 		return result, err
 	}
-	if request.Operation == ExactFeatureOperationRead {
+	switch request.Operation {
+	case ExactFeatureOperationRead:
 		command, err = fullReadCommand(feature.Type(), request.Target.Function)
 		if err != nil {
 			return result, err
+		}
+	case ExactFeatureOperationWrite:
+		if feature.Type() != model.FeatureTypeTypeGeneric &&
+			!functionDataAvailable(feature.Type(), request.Target.Function) {
+			return result, fmt.Errorf(
+				"%w: function %q is not typed for feature %q",
+				ErrExactFunctionDataUnavailable,
+				request.Target.Function,
+				feature.Type(),
+			)
 		}
 	}
 
@@ -262,12 +273,7 @@ func fullReadCommand(
 		}
 	}()
 
-	var matches []spineapi.FunctionDataCmdInterface
-	for _, functionData := range spine.CreateFunctionData[spineapi.FunctionDataCmdInterface](featureType) {
-		if !isNil(functionData) && functionData.FunctionType() == function {
-			matches = append(matches, functionData)
-		}
-	}
+	matches := functionDataMatches(featureType, function)
 	if len(matches) != 1 {
 		return model.CmdType{}, fmt.Errorf(
 			"%w: function %q is not typed for feature %q",
@@ -277,6 +283,31 @@ func fullReadCommand(
 		)
 	}
 	return matches[0].ReadCmdType(nil, nil), nil
+}
+
+func functionDataAvailable(
+	featureType model.FeatureTypeType,
+	function model.FunctionType,
+) (available bool) {
+	defer func() {
+		if recover() != nil {
+			available = false
+		}
+	}()
+	return len(functionDataMatches(featureType, function)) == 1
+}
+
+func functionDataMatches(
+	featureType model.FeatureTypeType,
+	function model.FunctionType,
+) []spineapi.FunctionDataCmdInterface {
+	var matches []spineapi.FunctionDataCmdInterface
+	for _, functionData := range spine.CreateFunctionData[spineapi.FunctionDataCmdInterface](featureType) {
+		if !isNil(functionData) && functionData.FunctionType() == function {
+			matches = append(matches, functionData)
+		}
+	}
+	return matches
 }
 
 func soleTypedFunction(command model.CmdType) (model.FunctionType, error) {
@@ -295,11 +326,9 @@ func soleTypedFunction(command model.CmdType) (model.FunctionType, error) {
 		function, found := model.EEBusTags(structField)[model.EEBusTagFunction]
 		if found && function != "" {
 			functions = append(functions, model.FunctionType(function))
-		} else {
-			functions = append(functions, "")
 		}
 	}
-	if len(functions) != 1 || functions[0] == "" {
+	if len(functions) != 1 {
 		return "", ErrExactFunctionMismatch
 	}
 	return functions[0], nil
@@ -347,8 +376,14 @@ func validateResponse(
 	case ExactFeatureOperationWrite:
 		if *response.Header.CmdClassifier != model.CmdClassifierTypeResult ||
 			response.Cmd.ResultData == nil ||
-			response.Cmd.ResultData.ErrorNumber == nil {
+			response.Cmd.ResultData.ErrorNumber == nil ||
+			len(response.Cmd.Filter) != 0 ||
+			response.Cmd.Function != nil {
 			return malformed("exact WRITE response is not a typed result")
+		}
+		function, err := soleTypedFunction(response.Cmd)
+		if err != nil || function != model.FunctionTypeResultData {
+			return malformed("exact WRITE response contains mixed typed data")
 		}
 		if *response.Cmd.ResultData.ErrorNumber != model.ErrorNumberTypeNoError {
 			return &spineapi.CorrelatedRemoteError{
