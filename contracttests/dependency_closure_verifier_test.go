@@ -20,7 +20,7 @@ import (
 const (
 	verifierCLI     = "python3 scripts/verify_dependency_closure.py --repo . --manifest provenance/closure-manifest.json --inventory-output <path> --evidence-output <path>"
 	canonicalEEBus  = canonicalModule
-	reviewedSpine   = "v0.7.1-helianthus.5"
+	reviewedSpine   = "v0.7.1-helianthus.6"
 	reviewedEEBus   = "v0.7.1-helianthus.2"
 	privateSentinel = "PRIVATE-CONTENT-must-not-leak-8f2c6f71"
 )
@@ -374,7 +374,7 @@ go 1.22.0
 
 require (
 	github.com/Project-Helianthus/helianthus-ship-go ` + canonicalVer + `
-	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.5
+	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.6
 github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.2
 	example.com/unrelated v0.0.0-20260716000000-0123456789ab
 )
