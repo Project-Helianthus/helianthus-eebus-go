@@ -60,14 +60,27 @@ func (r *senderReplacingRemote) Sender() spineapi.SenderInterface {
 	return r.DeviceRemoteInterface.Sender()
 }
 
-type exactRemotePeerResolverFunc func(
-	model.AddressDeviceType,
-) (ExactRemotePeer, error)
+type exactRemoteRuntimeStub struct {
+	resolve   func(model.AddressDeviceType) (spineapi.DeviceRemoteInterface, error)
+	roundTrip func(
+		context.Context,
+		ExactRemoteBinding,
+		spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error)
+}
 
-func (resolve exactRemotePeerResolverFunc) ResolveExactRemotePeer(
+func (runtime *exactRemoteRuntimeStub) ResolveExactRemoteDevice(
 	address model.AddressDeviceType,
-) (ExactRemotePeer, error) {
-	return resolve(address)
+) (spineapi.DeviceRemoteInterface, error) {
+	return runtime.resolve(address)
+}
+
+func (runtime *exactRemoteRuntimeStub) RoundTripIfCurrent(
+	ctx context.Context,
+	expected ExactRemoteBinding,
+	request spineapi.CorrelatedRequest,
+) (spineapi.CorrelatedResponse, error) {
+	return runtime.roundTrip(ctx, expected, request)
 }
 
 const (
@@ -81,7 +94,7 @@ type executorFixture struct {
 	remote        spineapi.DeviceRemoteInterface
 	remoteFeature spineapi.FeatureRemoteInterface
 	sender        *roundTripSender
-	resolver      ExactRemotePeerResolver
+	runtime       ExactRemoteRuntime
 	request       ExactFeatureRequest
 }
 
@@ -151,7 +164,7 @@ func newExecutorFixture(
 	remoteEntity.AddFeature(remoteFeature)
 	remote.AddEntity(remoteEntity)
 	local.AddRemoteDeviceForSki(remote.Ski(), remote)
-	resolver := exactResolverForLocal(
+	runtime := exactRuntimeForLocal(
 		local,
 		testRemoteIdentity,
 		testConnectionGen,
@@ -176,7 +189,7 @@ func newExecutorFixture(
 		remote:        remote,
 		remoteFeature: remoteFeature,
 		sender:        sender,
-		resolver:      resolver,
+		runtime:       runtime,
 		request:       request,
 	}
 }
@@ -234,7 +247,7 @@ func TestExactFeatureExecutorFullRead(t *testing.T) {
 		return readReply(request, 41), nil
 	})
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -316,7 +329,7 @@ func TestExactFeatureExecutorFullWrite(t *testing.T) {
 	fixture.request.Operation = ExactFeatureOperationWrite
 	fixture.request.Commands = []model.CmdType{writeCmd}
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -348,7 +361,7 @@ func TestExactFeatureExecutorPreservesReadReplyExtension(t *testing.T) {
 		return response, nil
 	})
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -367,7 +380,7 @@ func TestExactFeatureExecutorExactSelection(t *testing.T) {
 	) (spineapi.CorrelatedResponse, error) {
 		return readReply(request, 1), nil
 	})
-	executor := NewExactFeatureExecutor(fixture.local, fixture.resolver)
+	executor := NewExactFeatureExecutor(fixture.local, fixture.runtime)
 
 	tests := []struct {
 		name   string
@@ -474,10 +487,10 @@ func TestExactFeatureExecutorExactSelection(t *testing.T) {
 
 func TestExactFeatureExecutorRequiresCurrentPeerProofWithoutSend(t *testing.T) {
 	tests := []struct {
-		name        string
-		newResolver func(*executorFixture) ExactRemotePeerResolver
-		want        error
-		failure     ExactRemoteBindingFailure
+		name       string
+		newRuntime func(*executorFixture) ExactRemoteRuntime
+		want       error
+		failure    ExactRemoteBindingFailure
 	}{
 		{
 			name: "missing resolver",
@@ -485,30 +498,42 @@ func TestExactFeatureExecutorRequiresCurrentPeerProofWithoutSend(t *testing.T) {
 		},
 		{
 			name: "missing identity proof",
-			newResolver: func(fixture *executorFixture) ExactRemotePeerResolver {
-				return exactRemotePeerResolverFunc(func(
-					model.AddressDeviceType,
-				) (ExactRemotePeer, error) {
-					return ExactRemotePeer{
-						Device:               fixture.remote,
-						ConnectionGeneration: testConnectionGen,
-					}, nil
-				})
+			newRuntime: func(fixture *executorFixture) ExactRemoteRuntime {
+				return &exactRemoteRuntimeStub{
+					resolve: func(model.AddressDeviceType) (spineapi.DeviceRemoteInterface, error) {
+						return fixture.remote, nil
+					},
+					roundTrip: func(
+						context.Context,
+						ExactRemoteBinding,
+						spineapi.CorrelatedRequest,
+					) (spineapi.CorrelatedResponse, error) {
+						return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+							Failure: ExactRemoteBindingProofMissing,
+						}
+					},
+				}
 			},
 			want:    ErrExactRemoteBindingMismatch,
 			failure: ExactRemoteBindingProofMissing,
 		},
 		{
 			name: "zero generation proof",
-			newResolver: func(fixture *executorFixture) ExactRemotePeerResolver {
-				return exactRemotePeerResolverFunc(func(
-					model.AddressDeviceType,
-				) (ExactRemotePeer, error) {
-					return ExactRemotePeer{
-						Device:         fixture.remote,
-						RemoteIdentity: testRemoteIdentity,
-					}, nil
-				})
+			newRuntime: func(fixture *executorFixture) ExactRemoteRuntime {
+				return &exactRemoteRuntimeStub{
+					resolve: func(model.AddressDeviceType) (spineapi.DeviceRemoteInterface, error) {
+						return fixture.remote, nil
+					},
+					roundTrip: func(
+						context.Context,
+						ExactRemoteBinding,
+						spineapi.CorrelatedRequest,
+					) (spineapi.CorrelatedResponse, error) {
+						return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+							Failure: ExactRemoteBindingProofMissing,
+						}
+					},
+				}
 			},
 			want:    ErrExactRemoteBindingMismatch,
 			failure: ExactRemoteBindingProofMissing,
@@ -523,12 +548,12 @@ func TestExactFeatureExecutorRequiresCurrentPeerProofWithoutSend(t *testing.T) {
 			) (spineapi.CorrelatedResponse, error) {
 				return readReply(request, 1), nil
 			})
-			var resolver ExactRemotePeerResolver
-			if test.newResolver != nil {
-				resolver = test.newResolver(fixture)
+			var runtime ExactRemoteRuntime
+			if test.newRuntime != nil {
+				runtime = test.newRuntime(fixture)
 			}
 
-			_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+			_, err := NewExactFeatureExecutor(fixture.local, runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -606,20 +631,31 @@ func TestExactFeatureExecutorRejectsReplacementAndStaleGenerationWithoutSend(t *
 				)
 			}
 
-			resolver := exactRemotePeerResolverFunc(func(
-				address model.AddressDeviceType,
-			) (ExactRemotePeer, error) {
-				if address != *fixture.request.Target.Address.Device {
-					return ExactRemotePeer{}, ErrExactTargetNotFound
-				}
-				return ExactRemotePeer{
-					Device:               resolvedRemote,
-					RemoteIdentity:       test.resolvedIdentity,
-					ConnectionGeneration: test.resolvedGen,
-				}, nil
-			})
+			runtime := &exactRemoteRuntimeStub{
+				resolve: func(
+					address model.AddressDeviceType,
+				) (spineapi.DeviceRemoteInterface, error) {
+					if address != *fixture.request.Target.Address.Device {
+						return nil, ErrExactTargetNotFound
+					}
+					return resolvedRemote, nil
+				},
+				roundTrip: func(
+					_ context.Context,
+					expected ExactRemoteBinding,
+					_ spineapi.CorrelatedRequest,
+				) (spineapi.CorrelatedResponse, error) {
+					failure := ExactRemoteBindingGenerationMismatch
+					if test.resolvedIdentity != expected.RemoteIdentity {
+						failure = ExactRemoteBindingIdentityMismatch
+					}
+					return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+						Failure: failure,
+					}
+				},
+			}
 
-			_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+			_, err := NewExactFeatureExecutor(fixture.local, runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -667,18 +703,29 @@ func TestExactFeatureExecutorRejectsSubstitutedCapabilityWithoutSend(t *testing.
 	) (spineapi.CorrelatedResponse, error) {
 		return readReply(request, 62), nil
 	}}
-	resolver := exactRemotePeerResolverFunc(func(
-		model.AddressDeviceType,
-	) (ExactRemotePeer, error) {
-		return ExactRemotePeer{
-			Device:               fixture.remote,
-			RoundTripper:         substitutedSender,
-			RemoteIdentity:       testRemoteIdentity,
-			ConnectionGeneration: testConnectionGen,
-		}, nil
-	})
+	leaseSender := spineapi.CorrelatedRoundTripper(fixture.sender)
+	currentSender := spineapi.CorrelatedRoundTripper(substitutedSender)
+	runtime := &exactRemoteRuntimeStub{
+		resolve: func(
+			model.AddressDeviceType,
+		) (spineapi.DeviceRemoteInterface, error) {
+			return fixture.remote, nil
+		},
+		roundTrip: func(
+			context.Context,
+			ExactRemoteBinding,
+			spineapi.CorrelatedRequest,
+		) (spineapi.CorrelatedResponse, error) {
+			if currentSender == leaseSender {
+				t.Fatal("test did not substitute the runtime-owned capability")
+			}
+			return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+				Failure: ExactRemoteBindingGenerationMismatch,
+			}
+		},
+	}
 
-	_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -688,6 +735,13 @@ func TestExactFeatureExecutorRejectsSubstitutedCapabilityWithoutSend(t *testing.
 	var bindingError *ExactRemoteBindingError
 	if !errors.As(err, &bindingError) {
 		t.Fatalf("Execute() error type = %T, want *ExactRemoteBindingError", err)
+	}
+	if bindingError.Failure != ExactRemoteBindingGenerationMismatch {
+		t.Fatalf(
+			"binding failure = %q, want %q",
+			bindingError.Failure,
+			ExactRemoteBindingGenerationMismatch,
+		)
 	}
 	if fixture.sender.calls.Load() != 0 {
 		t.Fatalf("current RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
@@ -714,18 +768,27 @@ func TestExactFeatureExecutorRejectsChangeBetweenResolveAndDispatchWithoutSend(t
 		DeviceRemoteInterface: fixture.remote,
 		replacement:           replacementSender,
 	}
-	resolver := exactRemotePeerResolverFunc(func(
-		model.AddressDeviceType,
-	) (ExactRemotePeer, error) {
-		return ExactRemotePeer{
-			Device:               remote,
-			RoundTripper:         fixture.sender,
-			RemoteIdentity:       testRemoteIdentity,
-			ConnectionGeneration: testConnectionGen,
-		}, nil
-	})
+	runtime := &exactRemoteRuntimeStub{
+		resolve: func(
+			model.AddressDeviceType,
+		) (spineapi.DeviceRemoteInterface, error) {
+			return remote, nil
+		},
+		roundTrip: func(
+			context.Context,
+			ExactRemoteBinding,
+			spineapi.CorrelatedRequest,
+		) (spineapi.CorrelatedResponse, error) {
+			if !remote.replaced.Load() {
+				t.Fatal("test did not replace Device.Sender() after resolution")
+			}
+			return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+				Failure: ExactRemoteBindingGenerationMismatch,
+			}
+		},
+	}
 
-	_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -766,7 +829,7 @@ func TestExactFeatureExecutorRejectsAmbiguousRemoteDevice(t *testing.T) {
 	})
 	fixture.local.AddRemoteDeviceForSki(duplicate.Ski(), duplicate)
 
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -810,7 +873,7 @@ func TestExactFeatureExecutorDeclaredOperationGate(t *testing.T) {
 			fixture.request.Operation = test.operation
 			fixture.request.Commands = test.commands
 
-			_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+			_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -946,7 +1009,7 @@ func TestExactFeatureExecutorForbiddenRequestsAreZeroContact(t *testing.T) {
 			fixture.request.Operation = test.operation
 			fixture.request.Commands = test.commands
 
-			_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+			_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -969,7 +1032,7 @@ func TestExactFeatureExecutorMissingTargetIsZeroContact(t *testing.T) {
 	})
 	fixture.request.Target.Address.Device = nil
 
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1020,7 +1083,7 @@ func TestExactFeatureExecutorMissingRoundTripperIsZeroContact(t *testing.T) {
 
 	request := fixture.request
 	request.Target.Address = *remoteFeature.Address()
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(context.Background(), request)
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(context.Background(), request)
 	if !errors.Is(err, ErrExactRoundTripperUnavailable) {
 		t.Fatalf("Execute() error = %v, want %v", err, ErrExactRoundTripperUnavailable)
 	}
@@ -1049,7 +1112,7 @@ func TestExactFeatureExecutorTypedRemoteError(t *testing.T) {
 		MeasurementListData: &model.MeasurementListDataType{},
 	}}
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1128,7 +1191,7 @@ func TestExactFeatureExecutorTerminalPropagation(t *testing.T) {
 			}
 			defer cancel()
 
-			result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(ctx, fixture.request)
+			result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(ctx, fixture.request)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Execute() error = %v, want %v", err, test.want)
 			}
@@ -1153,7 +1216,7 @@ func TestExactFeatureExecutorRejectsEmptySuccess(t *testing.T) {
 		return spineapi.CorrelatedResponse{}, nil
 	})
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1179,7 +1242,7 @@ func TestExactFeatureExecutorSynchronousReplyAndTimestampOrder(t *testing.T) {
 	})
 
 	before := time.Now()
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1249,7 +1312,7 @@ func TestExactFeatureExecutorAcceptsExactCompatibleRolePairs(t *testing.T) {
 				test.remoteRole,
 			)
 
-			result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+			result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -1286,7 +1349,7 @@ func TestExactFeatureExecutorRejectsCallFunctionUnderWrite(t *testing.T) {
 		DataTunnelingCall: &model.DataTunnelingCallType{},
 	}}
 
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1318,7 +1381,7 @@ func TestExactFeatureExecutorRejectsCrossFamilyWrite(t *testing.T) {
 		LoadControlLimitListData: &model.LoadControlLimitListDataType{},
 	}}
 
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1374,7 +1437,7 @@ func TestExactFeatureExecutorRejectsMixedWriteResult(t *testing.T) {
 				MeasurementListData: &model.MeasurementListDataType{},
 			}}
 
-			result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+			result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 				context.Background(),
 				fixture.request,
 			)
@@ -1408,7 +1471,7 @@ func TestExactFeatureExecutorFactoryOmissionIsZeroContact(t *testing.T) {
 	}})
 	fixture.request.Target.Function = function
 
-	_, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	_, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1428,7 +1491,7 @@ func TestExactFeatureExecutorRejectsZeroCorrelationKey(t *testing.T) {
 		return readReply(request, 0), nil
 	})
 
-	result, err := NewExactFeatureExecutor(fixture.local, fixture.resolver).Execute(
+	result, err := NewExactFeatureExecutor(fixture.local, fixture.runtime).Execute(
 		context.Background(),
 		fixture.request,
 	)
@@ -1476,14 +1539,14 @@ func newExactRemoteForTarget(
 	return remote
 }
 
-func exactResolverForLocal(
+func exactRuntimeForLocal(
 	local spineapi.DeviceLocalInterface,
 	identity ExactRemoteIdentity,
 	generation ExactConnectionGeneration,
-) ExactRemotePeerResolver {
-	return exactRemotePeerResolverFunc(func(
+) ExactRemoteRuntime {
+	resolve := func(
 		address model.AddressDeviceType,
-	) (ExactRemotePeer, error) {
+	) (spineapi.DeviceRemoteInterface, error) {
 		var matches []spineapi.DeviceRemoteInterface
 		for _, remote := range local.RemoteDevices() {
 			if !isNil(remote) && remote.Address() != nil &&
@@ -1493,22 +1556,57 @@ func exactResolverForLocal(
 		}
 		switch len(matches) {
 		case 0:
-			return ExactRemotePeer{}, ErrExactTargetNotFound
+			return nil, ErrExactTargetNotFound
 		case 1:
-			roundTripper, _ := matches[0].Sender().(spineapi.CorrelatedRoundTripper)
-			return ExactRemotePeer{
-				Device:               matches[0],
-				RoundTripper:         roundTripper,
-				RemoteIdentity:       identity,
-				ConnectionGeneration: generation,
-			}, nil
+			return matches[0], nil
 		default:
-			return ExactRemotePeer{}, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"%w: remote device address",
 				ErrExactTargetAmbiguous,
 			)
 		}
-	})
+	}
+	return &exactRemoteRuntimeStub{
+		resolve: resolve,
+		roundTrip: func(
+			ctx context.Context,
+			expected ExactRemoteBinding,
+			request spineapi.CorrelatedRequest,
+		) (spineapi.CorrelatedResponse, error) {
+			remote, err := resolve(expected.DeviceAddress)
+			if err != nil {
+				return spineapi.CorrelatedResponse{}, err
+			}
+			if identity == "" || generation == 0 {
+				return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+					Failure: ExactRemoteBindingProofMissing,
+				}
+			}
+			if remote.Address() == nil ||
+				*remote.Address() != expected.DeviceAddress ||
+				request.Destination.Device == nil ||
+				*request.Destination.Device != expected.DeviceAddress {
+				return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+					Failure: ExactRemoteBindingAddressMismatch,
+				}
+			}
+			if identity != expected.RemoteIdentity {
+				return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+					Failure: ExactRemoteBindingIdentityMismatch,
+				}
+			}
+			if generation != expected.ConnectionGeneration {
+				return spineapi.CorrelatedResponse{}, &ExactRemoteBindingError{
+					Failure: ExactRemoteBindingGenerationMismatch,
+				}
+			}
+			roundTripper, ok := remote.Sender().(spineapi.CorrelatedRoundTripper)
+			if !ok || isNil(roundTripper) {
+				return spineapi.CorrelatedResponse{}, ErrExactRoundTripperUnavailable
+			}
+			return roundTripper.RoundTrip(ctx, request)
+		},
+	}
 }
 
 func newRoleFixture(
@@ -1568,7 +1666,7 @@ func newRoleFixture(
 	remoteEntity.AddFeature(remoteFeature)
 	remote.AddEntity(remoteEntity)
 	local.AddRemoteDeviceForSki(remote.Ski(), remote)
-	resolver := exactResolverForLocal(
+	runtime := exactRuntimeForLocal(
 		local,
 		testRemoteIdentity,
 		testConnectionGen,
@@ -1580,7 +1678,7 @@ func newRoleFixture(
 		remote:        remote,
 		remoteFeature: remoteFeature,
 		sender:        sender,
-		resolver:      resolver,
+		runtime:       runtime,
 		request: ExactFeatureRequest{
 			Source: *localFeature.Address(),
 			Target: ExactFeatureTarget{

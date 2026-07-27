@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -39,6 +40,7 @@ type ExactRemoteBindingFailure string
 
 const (
 	ExactRemoteBindingProofMissing       ExactRemoteBindingFailure = "proof_missing"
+	ExactRemoteBindingAddressMismatch    ExactRemoteBindingFailure = "address_mismatch"
 	ExactRemoteBindingIdentityMismatch   ExactRemoteBindingFailure = "identity_mismatch"
 	ExactRemoteBindingGenerationMismatch ExactRemoteBindingFailure = "generation_mismatch"
 )
@@ -59,20 +61,24 @@ func (e *ExactRemoteBindingError) Unwrap() error {
 	return ErrExactRemoteBindingMismatch
 }
 
-// ExactRemotePeer is one atomic current-peer snapshot returned by the upper
-// runtime immediately before executor admission and send. RoundTripper must be
-// the immutable capability for ConnectionGeneration and fail closed after that
-// generation retires.
-type ExactRemotePeer struct {
-	Device               spineapi.DeviceRemoteInterface
-	RoundTripper         spineapi.CorrelatedRoundTripper
+// ExactRemoteBinding identifies the peer generation expected at dispatch.
+type ExactRemoteBinding struct {
+	DeviceAddress        model.AddressDeviceType
 	RemoteIdentity       ExactRemoteIdentity
 	ConnectionGeneration ExactConnectionGeneration
 }
 
-// ExactRemotePeerResolver proves the current peer bound to a SPINE address.
-type ExactRemotePeerResolver interface {
-	ResolveExactRemotePeer(model.AddressDeviceType) (ExactRemotePeer, error)
+// ExactRemoteRuntime owns topology resolution and generation-bound dispatch.
+// RoundTripIfCurrent must atomically verify every expected binding field and
+// the owned transport capability before sending. A changed binding must return
+// ExactRemoteBindingError without invoking an underlying round-tripper.
+type ExactRemoteRuntime interface {
+	ResolveExactRemoteDevice(model.AddressDeviceType) (spineapi.DeviceRemoteInterface, error)
+	RoundTripIfCurrent(
+		context.Context,
+		ExactRemoteBinding,
+		spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error)
 }
 
 // ExactFeatureOperation is the closed operation set accepted by the executor.
