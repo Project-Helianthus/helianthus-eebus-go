@@ -24,12 +24,12 @@ const (
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
 	canonicalShipVer  = "v0.6.1-helianthus.9"
-	canonicalSpineVer = "v0.7.1-helianthus.1"
+	canonicalSpineVer = "v0.7.1-helianthus.5"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "6d424ece0ca028d70a15c20bb6b5e5001ddc1ff1d133a22d79986698b9c6f912"
+	productionHash    = "c743abb92e69798b54b9a1febcfa5cc373cffdbbcc9e65a2be738761aad5e885"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -202,7 +202,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		name, module, version, tag, commit, tree, manifestDigest string
 	}{
 		{"ship", canonicalShip, canonicalShipVer, "707a075de4ee1148f38e6fe1e6e101f73747c1df", "cfb9e17c3e045b2a53bd39afef2d33cd38326bc5", "4d300074668be337fbe39453f1183ef36ff547c6", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
-		{"spine", canonicalSpine, canonicalSpineVer, "2722d31718aa89b1d31faf16b5c14bbee692e2de", "c85a449cc44c7e1fd2a44f8b10724d81e89bb260", "02236304d8c74914a701be3896eaaf94be32e2d6", "39cf9ffc85ce1466d73f8d911a9046640ec4335876b460460c94781749017a4e"},
+		{"spine", canonicalSpine, canonicalSpineVer, "1a2163cf79392cce35011b61456d8ff42057ee25", "a35ec1c48a6cdd2cdcb9b6e56086360824fb21f2", "53f2eee2e8ccac07882c4f21dc3374e25a3eb924", "b04b01f46239c54a8f44f298aa4f5a3ffc9ab065cfeb622f53e016d8cc8d417d"},
 	} {
 		var reviewed *struct {
 			Module     string `json:"module"`
