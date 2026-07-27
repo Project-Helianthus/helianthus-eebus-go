@@ -118,6 +118,7 @@ type ExactFeatureResult struct {
 	CorrelationKey model.MsgCounterType
 	Request        model.CmdType
 	Response       model.CmdType
+	UnknownFields  []spineapi.CorrelatedUnknownField
 	RemoteError    *spineapi.CorrelatedRemoteError
 	ProtocolError  *spineapi.CorrelatedProtocolError
 	RequestedAt    time.Time

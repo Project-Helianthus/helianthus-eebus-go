@@ -115,6 +115,7 @@ func (e *ExactFeatureExecutor) Execute(
 	result.RespondedAt = time.Now()
 	result.CorrelationKey = response.CorrelationKey
 	result.Response = response.Cmd
+	result.UnknownFields = cloneCorrelatedUnknownFields(response.UnknownFields)
 	if roundTripErr != nil {
 		setTypedError(&result, roundTripErr)
 		return result, roundTripErr
@@ -461,6 +462,22 @@ func cloneFeatureAddress(address model.FeatureAddressType) model.FeatureAddressT
 	if address.Feature != nil {
 		feature := *address.Feature
 		result.Feature = &feature
+	}
+	return result
+}
+
+func cloneCorrelatedUnknownFields(
+	fields []spineapi.CorrelatedUnknownField,
+) []spineapi.CorrelatedUnknownField {
+	if len(fields) == 0 {
+		return nil
+	}
+	result := make([]spineapi.CorrelatedUnknownField, len(fields))
+	for index, field := range fields {
+		result[index] = spineapi.CorrelatedUnknownField{
+			Path:  strings.Clone(field.Path),
+			Value: spineapi.CorrelatedUnknownValue(field.Value.JSON()),
+		}
 	}
 	return result
 }
