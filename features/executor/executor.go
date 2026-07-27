@@ -17,11 +17,18 @@ import (
 )
 
 type ExactFeatureExecutor struct {
-	local spineapi.DeviceLocalInterface
+	local    spineapi.DeviceLocalInterface
+	resolver ExactRemotePeerResolver
 }
 
-func NewExactFeatureExecutor(local spineapi.DeviceLocalInterface) *ExactFeatureExecutor {
-	return &ExactFeatureExecutor{local: local}
+func NewExactFeatureExecutor(
+	local spineapi.DeviceLocalInterface,
+	resolver ExactRemotePeerResolver,
+) *ExactFeatureExecutor {
+	return &ExactFeatureExecutor{
+		local:    local,
+		resolver: resolver,
+	}
 }
 
 func (e *ExactFeatureExecutor) Execute(
@@ -44,6 +51,12 @@ func (e *ExactFeatureExecutor) Execute(
 		request.Target.Function == "" {
 		return result, fmt.Errorf("%w: address, type, role, and function are required", ErrInvalidExactTarget)
 	}
+	if request.Target.RemoteIdentity == "" {
+		return result, fmt.Errorf("%w: remote identity is required", ErrInvalidExactTarget)
+	}
+	if request.Target.ConnectionGeneration == 0 {
+		return result, fmt.Errorf("%w: positive connection generation is required", ErrInvalidExactTarget)
+	}
 
 	classifier, command, err := commandForRequest(request)
 	if err != nil {
@@ -53,7 +66,7 @@ func (e *ExactFeatureExecutor) Execute(
 	if err != nil {
 		return result, err
 	}
-	remote, feature, err := e.resolveTarget(request.Target)
+	resolved, feature, err := e.resolveTarget(request.Target)
 	if err != nil {
 		return result, err
 	}
@@ -81,9 +94,7 @@ func (e *ExactFeatureExecutor) Execute(
 		}
 	}
 
-	sender := remote.Sender()
-	roundTripper, ok := sender.(spineapi.CorrelatedRoundTripper)
-	if !ok || isNil(roundTripper) {
+	if isNil(resolved.RoundTripper) {
 		return result, ErrExactRoundTripperUnavailable
 	}
 
@@ -96,7 +107,7 @@ func (e *ExactFeatureExecutor) Execute(
 	}
 	result.Request = command
 	result.RequestedAt = time.Now()
-	response, roundTripErr := roundTripper.RoundTrip(ctx, correlatedRequest)
+	response, roundTripErr := resolved.RoundTripper.RoundTrip(ctx, correlatedRequest)
 	result.RespondedAt = time.Now()
 	result.CorrelationKey = response.CorrelationKey
 	result.Response = response.Cmd
@@ -173,27 +184,43 @@ func (e *ExactFeatureExecutor) resolveSource(
 
 func (e *ExactFeatureExecutor) resolveTarget(
 	target ExactFeatureTarget,
-) (spineapi.DeviceRemoteInterface, spineapi.FeatureRemoteInterface, error) {
+) (ExactRemotePeer, spineapi.FeatureRemoteInterface, error) {
 	if e == nil || isNil(e.local) {
-		return nil, nil, ErrExactTargetNotFound
+		return ExactRemotePeer{}, nil, ErrExactTargetNotFound
+	}
+	if isNil(e.resolver) {
+		return ExactRemotePeer{}, nil, ErrExactRemoteResolverUnavailable
 	}
 
-	var devices []spineapi.DeviceRemoteInterface
-	for _, device := range e.local.RemoteDevices() {
-		if !isNil(device) && device.Address() != nil &&
-			*device.Address() == *target.Address.Device {
-			devices = append(devices, device)
+	resolved, err := e.resolver.ResolveExactRemotePeer(*target.Address.Device)
+	if err != nil {
+		return ExactRemotePeer{}, nil, err
+	}
+	if isNil(resolved.Device) {
+		return ExactRemotePeer{}, nil, ErrExactTargetNotFound
+	}
+	if resolved.RemoteIdentity == "" || resolved.ConnectionGeneration == 0 {
+		return ExactRemotePeer{}, nil, &ExactRemoteBindingError{
+			Failure: ExactRemoteBindingProofMissing,
 		}
 	}
-	if len(devices) == 0 {
-		return nil, nil, ErrExactTargetNotFound
+	if resolved.RemoteIdentity != target.RemoteIdentity {
+		return ExactRemotePeer{}, nil, &ExactRemoteBindingError{
+			Failure: ExactRemoteBindingIdentityMismatch,
+		}
 	}
-	if len(devices) != 1 {
-		return nil, nil, fmt.Errorf("%w: remote device address", ErrExactTargetAmbiguous)
+	if resolved.ConnectionGeneration != target.ConnectionGeneration {
+		return ExactRemotePeer{}, nil, &ExactRemoteBindingError{
+			Failure: ExactRemoteBindingGenerationMismatch,
+		}
+	}
+	if resolved.Device.Address() == nil ||
+		*resolved.Device.Address() != *target.Address.Device {
+		return ExactRemotePeer{}, nil, ErrExactTargetMismatch
 	}
 
 	var features []spineapi.FeatureRemoteInterface
-	for _, entity := range devices[0].Entities() {
+	for _, entity := range resolved.Device.Entities() {
 		if isNil(entity) || entity.Address() == nil ||
 			!slices.Equal(entity.Address().Entity, target.Address.Entity) {
 			continue
@@ -205,21 +232,21 @@ func (e *ExactFeatureExecutor) resolveTarget(
 		}
 	}
 	if len(features) == 0 {
-		return nil, nil, ErrExactTargetNotFound
+		return ExactRemotePeer{}, nil, ErrExactTargetNotFound
 	}
 	if len(features) != 1 {
-		return nil, nil, fmt.Errorf("%w: remote feature address", ErrExactTargetAmbiguous)
+		return ExactRemotePeer{}, nil, fmt.Errorf("%w: remote feature address", ErrExactTargetAmbiguous)
 	}
 
 	feature := features[0]
 	if feature.Type() != target.FeatureType ||
 		feature.Role() != target.Role {
-		return nil, nil, ErrExactTargetMismatch
+		return ExactRemotePeer{}, nil, ErrExactTargetMismatch
 	}
 	if operations, found := feature.Operations()[target.Function]; !found || isNil(operations) {
-		return nil, nil, ErrExactTargetNotFound
+		return ExactRemotePeer{}, nil, ErrExactTargetNotFound
 	}
-	return devices[0], feature, nil
+	return resolved, feature, nil
 }
 
 func compatibleFeaturePair(
