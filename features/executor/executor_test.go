@@ -1098,8 +1098,7 @@ func newRoleFixture(
 ) *executorFixture {
 	t.Helper()
 
-	var sender *roundTripSender
-	sender = &roundTripSender{roundTrip: func(
+	sender := &roundTripSender{roundTrip: func(
 		_ context.Context,
 		request spineapi.CorrelatedRequest,
 	) (spineapi.CorrelatedResponse, error) {
