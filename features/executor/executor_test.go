@@ -822,6 +822,201 @@ func TestExactFeatureExecutorSynchronousReplyAndTimestampOrder(t *testing.T) {
 	}
 }
 
+func TestExactFeatureExecutorAcceptsExactCompatibleRolePairs(t *testing.T) {
+	tests := []struct {
+		name       string
+		localType  model.FeatureTypeType
+		localRole  model.RoleType
+		remoteType model.FeatureTypeType
+		remoteRole model.RoleType
+	}{
+		{
+			name:       "remote server",
+			localType:  model.FeatureTypeTypeMeasurement,
+			localRole:  model.RoleTypeClient,
+			remoteType: model.FeatureTypeTypeMeasurement,
+			remoteRole: model.RoleTypeServer,
+		},
+		{
+			name:       "remote client",
+			localType:  model.FeatureTypeTypeMeasurement,
+			localRole:  model.RoleTypeServer,
+			remoteType: model.FeatureTypeTypeMeasurement,
+			remoteRole: model.RoleTypeClient,
+		},
+		{
+			name:       "special pair",
+			localType:  model.FeatureTypeTypeMeasurement,
+			localRole:  model.RoleTypeSpecial,
+			remoteType: model.FeatureTypeTypeMeasurement,
+			remoteRole: model.RoleTypeSpecial,
+		},
+		{
+			name:       "generic local client",
+			localType:  model.FeatureTypeTypeGeneric,
+			localRole:  model.RoleTypeClient,
+			remoteType: model.FeatureTypeTypeMeasurement,
+			remoteRole: model.RoleTypeServer,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRoleFixture(
+				t,
+				test.localType,
+				test.localRole,
+				test.remoteType,
+				test.remoteRole,
+			)
+
+			result, err := NewExactFeatureExecutor(fixture.local).Execute(
+				context.Background(),
+				fixture.request,
+			)
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if fixture.sender.calls.Load() != 1 {
+				t.Fatalf("RoundTrip() calls = %d, want 1", fixture.sender.calls.Load())
+			}
+			if result.Response.MeasurementListData == nil {
+				t.Fatal("typed response was not preserved")
+			}
+		})
+	}
+}
+
+func TestExactFeatureExecutorRejectsCallFunctionUnderWrite(t *testing.T) {
+	fixture := newExecutorFixture(t, false, true, func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return writeResult(request, 1), nil
+	})
+	callFunction := model.FunctionTypeDataTunnelingCall
+	fixture.remoteFeature.SetOperations([]model.FunctionPropertyType{{
+		Function: &callFunction,
+		PossibleOperations: &model.PossibleOperationsType{
+			Write: &model.PossibleOperationsWriteType{},
+		},
+	}})
+	fixture.request.Target.Function = callFunction
+	fixture.request.Operation = ExactFeatureOperationWrite
+	fixture.request.Commands = []model.CmdType{{
+		DataTunnelingCall: &model.DataTunnelingCallType{},
+	}}
+
+	_, err := NewExactFeatureExecutor(fixture.local).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if !errors.Is(err, ErrExactOperationNotSupported) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrExactOperationNotSupported)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+	}
+}
+
+func TestExactFeatureExecutorRejectsZeroCorrelationKey(t *testing.T) {
+	fixture := newExecutorFixture(t, true, false, func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return readReply(request, 0), nil
+	})
+
+	result, err := NewExactFeatureExecutor(fixture.local).Execute(
+		context.Background(),
+		fixture.request,
+	)
+	if !errors.Is(err, ErrMalformedExactResponse) {
+		t.Fatalf("Execute() error = %v, want %v", err, ErrMalformedExactResponse)
+	}
+	if result.ProtocolError == nil {
+		t.Fatal("zero correlation key did not return a typed protocol error")
+	}
+}
+
+func newRoleFixture(
+	t *testing.T,
+	localType model.FeatureTypeType,
+	localRole model.RoleType,
+	remoteType model.FeatureTypeType,
+	remoteRole model.RoleType,
+) *executorFixture {
+	t.Helper()
+
+	var sender *roundTripSender
+	sender = &roundTripSender{roundTrip: func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		return readReply(request, 71), nil
+	}}
+	local := spine.NewDeviceLocal(
+		"brand",
+		"model",
+		"serial",
+		"code",
+		"role-local",
+		model.DeviceTypeTypeEnergyManagementSystem,
+		model.NetworkManagementFeatureSetTypeSmart,
+	)
+	localEntity := spine.NewEntityLocal(
+		local,
+		model.EntityTypeTypeDeviceInformation,
+		[]model.AddressEntityType{2},
+		time.Second,
+	)
+	localFeature := spine.NewFeatureLocal(1, localEntity, localType, localRole)
+	localEntity.AddFeature(localFeature)
+	local.AddEntity(localEntity)
+
+	remote := spine.NewDeviceRemote(local, "role-remote-ski", sender)
+	remoteAddress := model.AddressDeviceType("role-remote")
+	deviceType := model.DeviceTypeTypeSubmeter
+	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+		DeviceAddress: &model.DeviceAddressType{Device: &remoteAddress},
+		DeviceType:    &deviceType,
+	})
+	remoteEntity := spine.NewEntityRemote(
+		remote,
+		model.EntityTypeTypeGridConnectionPointOfPremises,
+		[]model.AddressEntityType{2},
+	)
+	remoteFeature := spine.NewFeatureRemote(1, remoteEntity, remoteType, remoteRole)
+	function := model.FunctionTypeMeasurementListData
+	remoteFeature.SetOperations([]model.FunctionPropertyType{{
+		Function: &function,
+		PossibleOperations: &model.PossibleOperationsType{
+			Read: &model.PossibleOperationsReadType{},
+		},
+	}})
+	remoteEntity.AddFeature(remoteFeature)
+	remote.AddEntity(remoteEntity)
+	local.AddRemoteDeviceForSki(remote.Ski(), remote)
+
+	return &executorFixture{
+		local:         local,
+		localFeature:  localFeature,
+		remote:        remote,
+		remoteFeature: remoteFeature,
+		sender:        sender,
+		request: ExactFeatureRequest{
+			Source: *localFeature.Address(),
+			Target: ExactFeatureTarget{
+				Address:     *remoteFeature.Address(),
+				FeatureType: remoteFeature.Type(),
+				Role:        remoteFeature.Role(),
+				Function:    function,
+			},
+			Operation: ExactFeatureOperationRead,
+		},
+	}
+}
+
 func cloneAddress(address model.FeatureAddressType) model.FeatureAddressType {
 	result := address
 	if address.Device != nil {

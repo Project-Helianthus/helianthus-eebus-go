@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
@@ -56,10 +57,8 @@ func (e *ExactFeatureExecutor) Execute(
 	if err != nil {
 		return result, err
 	}
-	if source.Role() != model.RoleTypeClient ||
-		feature.Role() != model.RoleTypeServer ||
-		source.Type() != feature.Type() {
-		return result, fmt.Errorf("%w: source and target must be matching client/server features", ErrExactTargetMismatch)
+	if !compatibleFeaturePair(source, feature) {
+		return result, fmt.Errorf("%w: source and target feature pair", ErrExactSourceMismatch)
 	}
 	if err := requireDeclaredOperation(feature, request.Target.Function, request.Operation); err != nil {
 		return result, err
@@ -104,6 +103,9 @@ func (e *ExactFeatureExecutor) Execute(
 func commandForRequest(
 	request ExactFeatureRequest,
 ) (model.CmdClassifierType, model.CmdType, error) {
+	if strings.HasSuffix(string(request.Target.Function), "Call") {
+		return "", model.CmdType{}, ErrExactOperationNotSupported
+	}
 	switch request.Operation {
 	case ExactFeatureOperationRead:
 		if len(request.Commands) != 0 {
@@ -200,14 +202,32 @@ func (e *ExactFeatureExecutor) resolveTarget(
 
 	feature := features[0]
 	if feature.Type() != target.FeatureType ||
-		feature.Role() != target.Role ||
-		target.Role != model.RoleTypeServer {
+		feature.Role() != target.Role {
 		return nil, nil, ErrExactTargetMismatch
 	}
 	if operations, found := feature.Operations()[target.Function]; !found || isNil(operations) {
 		return nil, nil, ErrExactTargetNotFound
 	}
 	return devices[0], feature, nil
+}
+
+func compatibleFeaturePair(
+	source spineapi.FeatureLocalInterface,
+	target spineapi.FeatureRemoteInterface,
+) bool {
+	if source.Type() != target.Type() && source.Type() != model.FeatureTypeTypeGeneric {
+		return false
+	}
+	switch target.Role() {
+	case model.RoleTypeServer:
+		return source.Role() == model.RoleTypeClient
+	case model.RoleTypeClient:
+		return source.Role() == model.RoleTypeServer
+	case model.RoleTypeSpecial:
+		return source.Role() == model.RoleTypeSpecial
+	default:
+		return false
+	}
 }
 
 func requireDeclaredOperation(
@@ -238,7 +258,7 @@ func fullReadCommand(
 	defer func() {
 		if recover() != nil {
 			command = model.CmdType{}
-			err = fmt.Errorf("%w: unsupported feature type %q", ErrExactTargetMismatch, featureType)
+			err = fmt.Errorf("%w: unsupported feature type %q", ErrExactFunctionDataUnavailable, featureType)
 		}
 	}()
 
@@ -251,7 +271,7 @@ func fullReadCommand(
 	if len(matches) != 1 {
 		return model.CmdType{}, fmt.Errorf(
 			"%w: function %q is not typed for feature %q",
-			ErrExactTargetMismatch,
+			ErrExactFunctionDataUnavailable,
 			function,
 			featureType,
 		)
@@ -295,6 +315,9 @@ func validateResponse(
 			Message: message,
 			Cause:   ErrMalformedExactResponse,
 		}
+	}
+	if response.CorrelationKey == 0 {
+		return malformed("exact correlated response key is missing")
 	}
 	if response.Header.AddressSource == nil ||
 		response.Header.AddressDestination == nil ||
