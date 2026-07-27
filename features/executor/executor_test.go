@@ -39,6 +39,16 @@ type legacySender struct {
 	spineapi.SenderInterface
 }
 
+type exactRemotePeerResolverFunc func(
+	model.AddressDeviceType,
+) (ExactRemotePeer, error)
+
+func (resolve exactRemotePeerResolverFunc) ResolveExactRemotePeer(
+	address model.AddressDeviceType,
+) (ExactRemotePeer, error) {
+	return resolve(address)
+}
+
 type executorFixture struct {
 	local         spineapi.DeviceLocalInterface
 	localFeature  spineapi.FeatureLocalInterface
@@ -396,6 +406,105 @@ func TestExactFeatureExecutorExactSelection(t *testing.T) {
 
 	if fixture.sender.calls.Load() != 0 {
 		t.Fatalf("RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+	}
+}
+
+func TestExactFeatureExecutorRejectsReplacementAndStaleGenerationWithoutSend(t *testing.T) {
+	tests := []struct {
+		name             string
+		resolvedIdentity ExactRemoteIdentity
+		resolvedGen      ExactConnectionGeneration
+		replacement      bool
+		wantFailure      ExactRemoteBindingFailure
+	}{
+		{
+			name:             "replacement peer at same SPINE address",
+			resolvedIdentity: "opaque-peer-replacement",
+			resolvedGen:      8,
+			replacement:      true,
+			wantFailure:      ExactRemoteBindingIdentityMismatch,
+		},
+		{
+			name:             "stale connection generation",
+			resolvedIdentity: "opaque-peer-original",
+			resolvedGen:      8,
+			wantFailure:      ExactRemoteBindingGenerationMismatch,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newExecutorFixture(t, true, false, func(
+				_ context.Context,
+				request spineapi.CorrelatedRequest,
+			) (spineapi.CorrelatedResponse, error) {
+				return readReply(request, 1), nil
+			})
+			fixture.request.Target.RemoteIdentity = "opaque-peer-original"
+			fixture.request.Target.ConnectionGeneration = 7
+
+			resolvedRemote := fixture.remote
+			var replacementSender *roundTripSender
+			if test.replacement {
+				replacementSender = &roundTripSender{roundTrip: func(
+					_ context.Context,
+					request spineapi.CorrelatedRequest,
+				) (spineapi.CorrelatedResponse, error) {
+					return readReply(request, 2), nil
+				}}
+				resolvedRemote = newExactRemoteForTarget(
+					t,
+					fixture.local,
+					replacementSender,
+					fixture.request.Target,
+				)
+			}
+
+			resolver := exactRemotePeerResolverFunc(func(
+				address model.AddressDeviceType,
+			) (ExactRemotePeer, error) {
+				if address != *fixture.request.Target.Address.Device {
+					return ExactRemotePeer{}, ErrExactTargetNotFound
+				}
+				return ExactRemotePeer{
+					Device:               resolvedRemote,
+					RemoteIdentity:       test.resolvedIdentity,
+					ConnectionGeneration: test.resolvedGen,
+				}, nil
+			})
+
+			_, err := NewExactFeatureExecutor(fixture.local, resolver).Execute(
+				context.Background(),
+				fixture.request,
+			)
+			if !errors.Is(err, ErrExactRemoteBindingMismatch) {
+				t.Fatalf(
+					"Execute() error = %v, want %v",
+					err,
+					ErrExactRemoteBindingMismatch,
+				)
+			}
+			var bindingError *ExactRemoteBindingError
+			if !errors.As(err, &bindingError) {
+				t.Fatalf("Execute() error type = %T, want *ExactRemoteBindingError", err)
+			}
+			if bindingError.Failure != test.wantFailure {
+				t.Fatalf(
+					"binding failure = %q, want %q",
+					bindingError.Failure,
+					test.wantFailure,
+				)
+			}
+			if fixture.sender.calls.Load() != 0 {
+				t.Fatalf("original RoundTrip() calls = %d, want 0", fixture.sender.calls.Load())
+			}
+			if replacementSender != nil && replacementSender.calls.Load() != 0 {
+				t.Fatalf(
+					"replacement RoundTrip() calls = %d, want 0",
+					replacementSender.calls.Load(),
+				)
+			}
+		})
 	}
 }
 
@@ -1087,6 +1196,42 @@ func TestExactFeatureExecutorRejectsZeroCorrelationKey(t *testing.T) {
 	if result.ProtocolError == nil {
 		t.Fatal("zero correlation key did not return a typed protocol error")
 	}
+}
+
+func newExactRemoteForTarget(
+	t *testing.T,
+	local spineapi.DeviceLocalInterface,
+	sender spineapi.SenderInterface,
+	target ExactFeatureTarget,
+) spineapi.DeviceRemoteInterface {
+	t.Helper()
+
+	remote := spine.NewDeviceRemote(local, "test-peer-internal-id", sender)
+	deviceType := model.DeviceTypeTypeSubmeter
+	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+		DeviceAddress: &model.DeviceAddressType{Device: target.Address.Device},
+		DeviceType:    &deviceType,
+	})
+	entity := spine.NewEntityRemote(
+		remote,
+		model.EntityTypeTypeGridConnectionPointOfPremises,
+		target.Address.Entity,
+	)
+	feature := spine.NewFeatureRemote(
+		uint(*target.Address.Feature),
+		entity,
+		target.FeatureType,
+		target.Role,
+	)
+	feature.SetOperations([]model.FunctionPropertyType{{
+		Function: &target.Function,
+		PossibleOperations: &model.PossibleOperationsType{
+			Read: &model.PossibleOperationsReadType{},
+		},
+	}})
+	entity.AddFeature(feature)
+	remote.AddEntity(entity)
+	return remote
 }
 
 func newRoleFixture(
