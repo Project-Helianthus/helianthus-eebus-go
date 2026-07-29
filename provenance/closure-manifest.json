@@ -5,7 +5,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.9",
+    "intended_prerelease": "v0.7.1-helianthus.12",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-eebus-go.git"
   },
@@ -22,16 +22,16 @@
         "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
       },
       "module": "github.com/Project-Helianthus/helianthus-ship-go",
-      "peeled_commit_sha": "cfb9e17c3e045b2a53bd39afef2d33cd38326bc5",
+      "peeled_commit_sha": "3e4be608d4a024e34e52747e78fc75f83cf9f762",
       "provenance_manifest": {
         "path": "provenance/closure-manifest.json",
         "sha256": "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
       },
-      "ref": "refs/tags/v0.6.1-helianthus.9",
+      "ref": "refs/tags/v0.6.1-helianthus.10",
       "repository": "https://github.com/Project-Helianthus/helianthus-ship-go.git",
-      "tag_object_sha": "707a075de4ee1148f38e6fe1e6e101f73747c1df",
-      "tree_sha": "4d300074668be337fbe39453f1183ef36ff547c6",
-      "version": "v0.6.1-helianthus.9"
+      "tag_object_sha": "7e42048df214ec27e0164e466ee42fbfa01128c0",
+      "tree_sha": "4fecb8ee517dbb5195afd243e3878c4db9c2515c",
+      "version": "v0.6.1-helianthus.10"
     },
     {
       "license": {
@@ -39,16 +39,16 @@
         "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
       },
       "module": "github.com/Project-Helianthus/helianthus-spine-go",
-      "peeled_commit_sha": "b21400335be90ea95a6cad5f512d1c8e22f2cdeb",
+      "peeled_commit_sha": "5db11e32ca673fad3fc0d8f8a318615e96e0873d",
       "provenance_manifest": {
         "path": "provenance/closure-manifest.json",
-        "sha256": "d0ff0442a418af9d640ce8dac3a7bf7db4395c93c098a07cd741a5a7e8af6351"
+        "sha256": "8b766cc0e18ed2e2edcafb44c477bd64444e0b03363736783395f9e1185cdc23"
       },
-      "ref": "refs/tags/v0.7.1-helianthus.6",
+      "ref": "refs/tags/v0.7.1-helianthus.8",
       "repository": "https://github.com/Project-Helianthus/helianthus-spine-go.git",
-      "tag_object_sha": "2092165ed645e9bc4ad6596f875bae68b1cc1716",
-      "tree_sha": "ba0ee41a415b8bdeeb2ec3def5839851f9c966e1",
-      "version": "v0.7.1-helianthus.6"
+      "tag_object_sha": "90cc7e1e68d2951577a2199d06e2dea4bc695c56",
+      "tree_sha": "a41e1bf8fb357cd7b4dac7d51f531b6923162368",
+      "version": "v0.7.1-helianthus.8"
     }
   ],
   "schema": "helianthus.provenance.closure-manifest.v2",
