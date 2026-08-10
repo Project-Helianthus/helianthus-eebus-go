@@ -87,9 +87,31 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--expected-prerelease", required=True)
+    parser.add_argument(
+        "--expected-reviewed-dependency",
+        action="append",
+        required=True,
+        metavar="MODULE@VERSION",
+    )
     parser.add_argument("--inventory-output", required=True)
     parser.add_argument("--evidence-output", required=True)
     return parser.parse_args()
+
+
+def expected_reviewed_dependencies(values: list[str]) -> dict[str, str]:
+    expected: dict[str, str] = {}
+    for value in values:
+        module, separator, version = value.rpartition("@")
+        if (
+            not separator
+            or module not in PROJECT_MODULES
+            or not version
+            or module in expected
+        ):
+            raise ValueError("invalid expected reviewed dependency")
+        expected[module] = version
+    return expected
 
 
 def run_command(repo: Path, argv: list[str]) -> bytes:
@@ -803,8 +825,25 @@ def evidence_bytes(
     violations: set[tuple[str, str, str]],
     git_version: str,
     go_version: str,
+    expected_prerelease: str,
+    expected_reviewed: dict[str, str],
 ) -> bytes:
     digest = lambda data: {"sha256": sha256(data), "source_sha": source_sha}
+    closure_argv = [
+        "python3",
+        VERIFIER_PATH,
+        "--repo",
+        ".",
+        "--manifest",
+        manifest_path,
+        "--expected-prerelease",
+        expected_prerelease,
+    ]
+    for module, version in sorted(expected_reviewed.items()):
+        closure_argv.extend(["--expected-reviewed-dependency", module + "@" + version])
+    closure_argv.extend(
+        ["--inventory-output", "OUTPUT_PATH", "--evidence-output", "OUTPUT_PATH"]
+    )
     evidence = {
         "artifacts": [dict(artifact, source_sha=source_sha) for artifact in artifacts],
         "commands": [
@@ -839,18 +878,7 @@ def evidence_bytes(
                 "tool_version": git_version,
             },
             {
-                "argv": [
-                    "python3",
-                    VERIFIER_PATH,
-                    "--repo",
-                    ".",
-                    "--manifest",
-                    manifest_path,
-                    "--inventory-output",
-                    "OUTPUT_PATH",
-                    "--evidence-output",
-                    "OUTPUT_PATH",
-                ],
+                "argv": closure_argv,
                 "name": "dependency_closure",
                 "tool_version": platform.python_version(),
             },
@@ -890,6 +918,18 @@ def verify(args: argparse.Namespace) -> int:
     source_sha = ""
     git_version = "unavailable"
     go_version = "unavailable"
+    try:
+        expected_reviewed = expected_reviewed_dependencies(
+            args.expected_reviewed_dependency
+        )
+    except ValueError:
+        expected_reviewed = {}
+        add_violation(
+            violations,
+            "expected-reviewed-dependency",
+            "verifier_policy",
+            "invalid_expected_dependency",
+        )
 
     try:
         git_version = run_command(repo, ["git", "--version"]).decode("ascii").strip()
@@ -955,6 +995,20 @@ def verify(args: argparse.Namespace) -> int:
         if not valid:
             add_violation(violations, manifest_path, "provenance", "invalid_manifest_schema")
         else:
+            if manifest_value["fork"]["intended_prerelease"] != args.expected_prerelease:
+                add_violation(
+                    violations,
+                    manifest_path,
+                    "provenance",
+                    "unexpected_intended_prerelease",
+                )
+            if reviewed != expected_reviewed:
+                add_violation(
+                    violations,
+                    manifest_path,
+                    "provenance",
+                    "unexpected_reviewed_dependency",
+                )
             artifacts, git_refs = verify_manifest_bindings(
                 repo, manifest_path, manifest_value, tracked, modes, violations
             )
@@ -1040,6 +1094,8 @@ def verify(args: argparse.Namespace) -> int:
         violations,
         git_version,
         go_version,
+        args.expected_prerelease,
+        expected_reviewed,
     )
     write_bytes(Path(args.evidence_output), evidence)
     if violations:
