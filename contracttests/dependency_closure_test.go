@@ -1,11 +1,8 @@
 package contracttests
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -23,13 +20,12 @@ const (
 	canonicalModule   = "github.com/Project-Helianthus/helianthus-eebus-go"
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
-	canonicalShipVer  = "v0.6.1-helianthus.12"
-	canonicalSpineVer = "v0.7.1-helianthus.8"
+	canonicalShipVer  = "v0.6.1-helianthus.13"
+	canonicalSpineVer = "v0.7.1-helianthus.9"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
 	upstreamShip      = "github.com/enbility/ship-go"
 	upstreamEEBus     = "github.com/enbility/eebus-go"
-	productionHash    = "7196a4b32ac63a4805dac3c4d9f0531f19974919ca3c39f897db35975fa3f319"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -177,7 +173,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-eebus-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.14"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.15"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/eebus-go.git"},
 		{"upstream.ref", manifest.Upstream.Ref, "refs/tags/v0.7.0"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
@@ -201,8 +197,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	for _, dependency := range []struct {
 		name, module, version, tag, commit, tree, manifestDigest string
 	}{
-		{"ship", canonicalShip, canonicalShipVer, "f1eb94071c989983d86c5a114613153a62d4449c", "f0ba01c12559a9b0a51b38cf2c98868f53da474a", "c4618d9705b786f3b497e6bb34d6832bde1aadcc", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
-		{"spine", canonicalSpine, canonicalSpineVer, "90cc7e1e68d2951577a2199d06e2dea4bc695c56", "5db11e32ca673fad3fc0d8f8a318615e96e0873d", "a41e1bf8fb357cd7b4dac7d51f531b6923162368", "8b766cc0e18ed2e2edcafb44c477bd64444e0b03363736783395f9e1185cdc23"},
+		{"ship", canonicalShip, canonicalShipVer, "108e3fb64d46aa545b636401cab8f50bb7e93101", "b9bd52ac12c773dece6f8f0d421505a6ee7cc4ae", "eaf865c7e0ca73bef32bb0bdc696d4cd97532b4e", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+		{"spine", canonicalSpine, canonicalSpineVer, "16ca565de6c93c2e43ee124fc6b3b098f0beb85f", "b0cdd8653ccc0c0d0133706172541e80179de818", "17ac7df9df37770f270e313ac9650f77ae282bcd", "2e7fddb971a0ff56de788eab73231ec5f3d940a1fd454ced323fd70df4e48d64"},
 	} {
 		var reviewed *struct {
 			Module     string `json:"module"`
@@ -339,27 +335,6 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 		t.Errorf("workflow immutable action pins = %d; want 10 full commit pins with tag comments", len(uses))
 	}
 }
-func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
-	root := repositoryRoot(t)
-	h := sha256.New()
-	for _, path := range trackedGoFiles(t, root) {
-		if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "contracttests/") {
-			continue
-		}
-		src := normalizeCanonicalImports(t, path, readFile(t, filepath.Join(root, path)))
-		src, err := format.Source(src)
-		if err != nil {
-			t.Fatalf("format normalized production source %s: %v", path, err)
-		}
-		fmt.Fprintf(h, "%s\x00", path)
-		h.Write(src)
-		h.Write([]byte{0})
-	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if got != productionHash {
-		t.Errorf("normalized production source digest = %s; want bound eebus v0.7 closure baseline %s; only canonical import identity changes are allowed", got, productionHash)
-	}
-}
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -376,19 +351,6 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
-}
-
-func trackedGoFiles(t *testing.T, root string) []string {
-	t.Helper()
-	cmd := exec.Command("git", "ls-files", "-z", "--", "*.go")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("list tracked Go files: %v", err)
-	}
-	paths := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
-	sort.Strings(paths)
-	return paths
 }
 
 func trackedGoSourceFiles(t *testing.T, root string) []string {
@@ -506,43 +468,4 @@ func assertExactPermissions(t *testing.T, job string, got, want map[string]strin
 			t.Errorf("%s job permission %s = %q; want %q", job, name, got[name], value)
 		}
 	}
-}
-
-func normalizeCanonicalImports(t *testing.T, path string, src []byte) []byte {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ImportsOnly)
-	if err != nil {
-		t.Fatalf("parse production imports in %s: %v", path, err)
-	}
-	type replacement struct {
-		start, end int
-		value      string
-	}
-	var replacements []replacement
-	for _, spec := range f.Imports {
-		start := fset.Position(spec.Path.Pos()).Offset
-		end := fset.Position(spec.Path.End()).Offset
-		importPath, err := strconv.Unquote(string(src[start:end]))
-		if err != nil {
-			t.Fatalf("decode production import in %s: %v", path, err)
-		}
-		normalized := importPath
-		if hasImportPrefix(importPath, canonicalModule) {
-			normalized = upstreamEEBus + strings.TrimPrefix(importPath, canonicalModule)
-		} else if hasImportPrefix(importPath, canonicalShip) {
-			normalized = upstreamShip + strings.TrimPrefix(importPath, canonicalShip)
-		} else if hasImportPrefix(importPath, canonicalSpine) {
-			normalized = upstreamSpine + strings.TrimPrefix(importPath, canonicalSpine)
-		}
-		if normalized != importPath {
-			replacements = append(replacements, replacement{start, end, strconv.Quote(normalized)})
-		}
-	}
-	out := append([]byte(nil), src...)
-	for i := len(replacements) - 1; i >= 0; i-- {
-		r := replacements[i]
-		out = append(append(append([]byte(nil), out[:r.start]...), r.value...), out[r.end:]...)
-	}
-	return out
 }

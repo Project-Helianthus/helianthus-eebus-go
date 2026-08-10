@@ -170,6 +170,7 @@ type typedPackage struct {
 }
 
 func TestOutboundPairingRemovalUsesTypedAPISurface(t *testing.T) {
+	// Behavioral tests cannot exhaustively prove that forbidden public symbols remain absent.
 	loaded := loadTypedRepositoryPackages(t)
 	var violations []string
 	violations = append(violations, apiSurfaceViolations(loaded[canonicalModule+"/api"])...)
