@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	verifierCLI     = "python3 scripts/verify_dependency_closure.py --repo . --manifest provenance/closure-manifest.json --inventory-output <path> --evidence-output <path>"
+	verifierCLI     = "python3 scripts/verify_dependency_closure.py --repo . --manifest provenance/closure-manifest.json --expected-prerelease <version> --expected-reviewed-dependency <module@version> --inventory-output <path> --evidence-output <path>"
 	canonicalEEBus  = canonicalModule
 	reviewedSpine   = "v0.7.1-helianthus.6"
 	reviewedEEBus   = "v0.7.1-helianthus.2"
@@ -68,6 +68,17 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 
 	cases := []closureCase{
 		{name: "valid canonical fixture", wantPass: true, deterministic: true},
+		{
+			name: "unexpected intended prerelease", wantPath: "provenance/closure-manifest.json", wantClass: "provenance", wantReason: "unexpected_intended_prerelease",
+			edit: replaceFixtureText("provenance/closure-manifest.json", "v0.0.1-helianthus.1", "v0.0.1-helianthus.2"),
+		},
+		{
+			name: "unexpected reviewed dependency", wantPath: "provenance/closure-manifest.json", wantClass: "provenance", wantReason: "unexpected_reviewed_dependency",
+			edit: func(files map[string]closureFixtureFile) {
+				replaceFixtureText("provenance/closure-manifest.json", "refs/tags/"+canonicalVer, "refs/tags/v0.6.1-helianthus.99")(files)
+				replaceFixtureText("provenance/closure-manifest.json", `"version": "`+canonicalVer+`"`, `"version": "v0.6.1-helianthus.99"`)(files)
+			},
+		},
 		{
 			name: "unrelated third party pseudo version", wantPass: true,
 			edit: replaceFixtureText("go.mod", "v0.0.0-20260716000000-0123456789ab", "v1.2.4-0.20260716000000-abcdefabcdef"),
@@ -728,13 +739,25 @@ func runFixtureVerifier(t *testing.T, verifier, root string) closureResult {
 	outputDir := t.TempDir()
 	inventoryPath := filepath.Join(outputDir, "tracked.nul")
 	evidencePath := filepath.Join(outputDir, "evidence.json")
-	cmd := exec.Command("python3", verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json", "--inventory-output", inventoryPath, "--evidence-output", evidencePath)
+	arguments := []string{verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json"}
+	arguments = append(arguments, fixtureVerifierPolicyArguments()...)
+	arguments = append(arguments, "--inventory-output", inventoryPath, "--evidence-output", evidencePath)
+	cmd := exec.Command("python3", arguments...)
 	cmd.Dir = root
 	cmd.Env = fixtureGoEnvironment(root)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	return closureResult{err: err, stdout: stdout.Bytes(), stderr: stderr.Bytes(), inventory: readFixtureOutput(t, inventoryPath), evidence: readFixtureOutput(t, evidencePath)}
+}
+
+func fixtureVerifierPolicyArguments() []string {
+	return []string{
+		"--expected-prerelease", "v0.0.1-helianthus.1",
+		"--expected-reviewed-dependency", canonicalShip + "@" + canonicalVer,
+		"--expected-reviewed-dependency", canonicalSpine + "@" + reviewedSpine,
+		"--expected-reviewed-dependency", canonicalEEBus + "@" + reviewedEEBus,
+	}
 }
 
 func removeFixtureModuleCache(root string) {

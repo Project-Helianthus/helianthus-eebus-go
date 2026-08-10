@@ -5,7 +5,7 @@ go 1.22.0
 require github.com/stretchr/testify v1.9.0
 
 require (
-	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.11
+	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.12
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.8
 	github.com/ahmetb/go-linq/v3 v3.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

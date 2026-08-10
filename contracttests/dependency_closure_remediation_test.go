@@ -208,7 +208,10 @@ func runVerifierAt(t *testing.T, verifier, root string, env []string) closureRes
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(python, verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json", "--inventory-output", filepath.Join(outputDir, "tracked.nul"), "--evidence-output", filepath.Join(outputDir, "evidence.json"))
+	arguments := []string{verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json"}
+	arguments = append(arguments, fixtureVerifierPolicyArguments()...)
+	arguments = append(arguments, "--inventory-output", filepath.Join(outputDir, "tracked.nul"), "--evidence-output", filepath.Join(outputDir, "evidence.json"))
+	cmd := exec.Command(python, arguments...)
 	cmd.Dir = root
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
