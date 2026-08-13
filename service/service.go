@@ -63,6 +63,7 @@ type listenerPolicyHub interface {
 
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
 type pairingCandidateHub = shipapi.PairingCandidateQueuer
+type pairingCandidateControllerHub = shipapi.PairingCandidateController
 
 var errPairingCandidateServiceTerminal = errors.New("pairing candidate queue is unavailable after service shutdown")
 
@@ -196,6 +197,7 @@ func NewServiceWithOptions(
 
 var _ api.ServiceInterface = (*Service)(nil)
 var _ api.PairingCandidateQueuer = (*Service)(nil)
+var _ api.PairingCandidateController = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
@@ -629,4 +631,48 @@ func (s *Service) QueuePairingCandidate(candidateRef, expectedSKI string) error 
 		return errors.New("connections hub does not support pairing candidate queue")
 	}
 	return queuer.QueuePairingCandidate(candidateRef, expectedSKI)
+}
+
+// SelectPairingCandidate forwards one opaque discovery capability and the SKI
+// validated by the operator without starting an outbound connection.
+func (s *Service) SelectPairingCandidate(
+	candidateRef string,
+	expectedSKI string,
+) (shipapi.PairingCandidateReservation, error) {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return shipapi.PairingCandidateReservation{}, errPairingCandidateServiceTerminal
+	}
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return shipapi.PairingCandidateReservation{}, errors.New("connections hub is not ready")
+	}
+	controller, ok := hub.(pairingCandidateControllerHub)
+	if !ok || isNilInterface(controller) {
+		return shipapi.PairingCandidateReservation{}, errors.New("connections hub does not support split pairing candidate control")
+	}
+	return controller.SelectPairingCandidate(candidateRef, expectedSKI)
+}
+
+// ConnectPairingCandidate forwards only the opaque reservation issued by SHIP.
+func (s *Service) ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errPairingCandidateServiceTerminal
+	}
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is not ready")
+	}
+	controller, ok := hub.(pairingCandidateControllerHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support split pairing candidate control")
+	}
+	return controller.ConnectPairingCandidate(reservation)
 }

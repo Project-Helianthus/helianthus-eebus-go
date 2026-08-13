@@ -30,12 +30,14 @@ type pairingCandidateHubSpy struct {
 
 type pairingCandidateControllerHubSpy struct {
 	shipapi.HubInterface
-	mux          sync.Mutex
-	reservation  shipapi.PairingCandidateReservation
-	selectErr    error
-	connectErr   error
-	selectCalls  []pairingCandidateCall
-	connectCalls []shipapi.PairingCandidateReservation
+	mux             sync.Mutex
+	reservation     shipapi.PairingCandidateReservation
+	selectErr       error
+	connectErr      error
+	selectCalls     []pairingCandidateCall
+	connectCalls    []shipapi.PairingCandidateReservation
+	shutdownEntered chan struct{}
+	shutdownRelease chan struct{}
 }
 
 func (hub *pairingCandidateControllerHubSpy) SelectPairingCandidate(
@@ -55,6 +57,15 @@ func (hub *pairingCandidateControllerHubSpy) ConnectPairingCandidate(
 	defer hub.mux.Unlock()
 	hub.connectCalls = append(hub.connectCalls, reservation)
 	return hub.connectErr
+}
+
+func (hub *pairingCandidateControllerHubSpy) Shutdown() {
+	if hub.shutdownEntered != nil {
+		close(hub.shutdownEntered)
+	}
+	if hub.shutdownRelease != nil {
+		<-hub.shutdownRelease
+	}
 }
 
 func (hub *pairingCandidateControllerHubSpy) snapshots() (
@@ -169,6 +180,37 @@ func TestServiceSplitPairingCandidateControlFailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServiceRejectsSplitPairingCandidateControlWhileShutdownIsInProgress(t *testing.T) {
+	var token [32]byte
+	token[0] = 0x4c
+	reservation := shipapi.NewPairingCandidateReservation(token)
+	hub := &pairingCandidateControllerHubSpy{
+		shutdownEntered: make(chan struct{}),
+		shutdownRelease: make(chan struct{}),
+	}
+	service := &Service{connectionsHub: hub, lifecycle: lifecycleRunning}
+	shutdownDone := make(chan struct{})
+	go func() {
+		service.Shutdown()
+		close(shutdownDone)
+	}()
+	<-hub.shutdownEntered
+
+	if _, err := service.SelectPairingCandidate(pairingCandidateFacadeTestRef, pairingCandidateFacadeTestSKI); !errors.Is(err, errPairingCandidateServiceTerminal) {
+		t.Fatalf("select error = %v, want %v", err, errPairingCandidateServiceTerminal)
+	}
+	if err := service.ConnectPairingCandidate(reservation); !errors.Is(err, errPairingCandidateServiceTerminal) {
+		t.Fatalf("connect error = %v, want %v", err, errPairingCandidateServiceTerminal)
+	}
+	selectCalls, connectCalls := hub.snapshots()
+	if len(selectCalls) != 0 || len(connectCalls) != 0 {
+		t.Fatalf("stopping service forwarded select=%v connect=%v", selectCalls, connectCalls)
+	}
+
+	close(hub.shutdownRelease)
+	<-shutdownDone
 }
 
 func TestServiceForwardsPairingCandidateReferenceAndExpectedSKIExactlyOnce(t *testing.T) {

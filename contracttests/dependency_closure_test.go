@@ -20,7 +20,7 @@ const (
 	canonicalModule   = "github.com/Project-Helianthus/helianthus-eebus-go"
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
-	canonicalShipVer  = "v0.6.1-helianthus.13"
+	canonicalShipVer  = "v0.6.1-helianthus.14"
 	canonicalSpineVer = "v0.7.1-helianthus.9"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
@@ -197,7 +197,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	for _, dependency := range []struct {
 		name, module, version, tag, commit, tree, manifestDigest string
 	}{
-		{"ship", canonicalShip, canonicalShipVer, "108e3fb64d46aa545b636401cab8f50bb7e93101", "b9bd52ac12c773dece6f8f0d421505a6ee7cc4ae", "eaf865c7e0ca73bef32bb0bdc696d4cd97532b4e", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+		{"ship", canonicalShip, canonicalShipVer, "be67a890e9e26141155c763f236a9b4b846276b6", "642b1b8809a9c617bea645ac3ecc5d658abf6214", "3bb6f6b1fec384ef9e161bc983c4ad1dafe3d515", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
 		{"spine", canonicalSpine, canonicalSpineVer, "16ca565de6c93c2e43ee124fc6b3b098f0beb85f", "b0cdd8653ccc0c0d0133706172541e80179de818", "17ac7df9df37770f270e313ac9650f77ae282bcd", "2e7fddb971a0ff56de788eab73231ec5f3d940a1fd454ced323fd70df4e48d64"},
 	} {
 		var reviewed *struct {
