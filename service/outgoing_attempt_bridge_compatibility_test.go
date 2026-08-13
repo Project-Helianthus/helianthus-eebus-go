@@ -105,6 +105,7 @@ var additiveConstructor func(
 
 var _ api.ServiceInterface = (*service.Service)(nil)
 var _ api.PairingCandidateQueuer = (*service.Service)(nil)
+var _ api.PairingCandidateController = (*service.Service)(nil)
 var _ api.ServiceReaderInterface = (*legacyReader)(nil)
 var _ shipapi.OutgoingAttemptGate = (*gate)(nil)
 var _ shipapi.OutgoingAttemptHubReaderInterface = (*sink)(nil)
