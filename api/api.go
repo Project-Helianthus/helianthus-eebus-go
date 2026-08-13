@@ -89,6 +89,15 @@ type PairingCandidateQueuer interface {
 	QueuePairingCandidate(candidateRef, expectedSKI string) error
 }
 
+// PairingCandidateController is an experimental dependency-fork capability
+// that separates observation selection from the one explicit outbound connect.
+// The reservation is opaque, process-local, and owned by SHIP. It is
+// intentionally separate from the stable ServiceInterface.
+type PairingCandidateController interface {
+	SelectPairingCandidate(candidateRef, expectedSKI string) (shipapi.PairingCandidateReservation, error)
+	ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error
+}
+
 // PairingCandidateReader is an experimental internal dependency-fork callback
 // for endpoint-redacted SHIP pairing candidate references. Discovery identity
 // fields remain untrusted peer claims. The owner must not forward these values

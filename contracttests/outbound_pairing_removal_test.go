@@ -63,6 +63,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"MeasurementServerInterface":             "type:interface",
 	"NewConfiguration":                       "func",
 	"PairingCandidateReader":                 "type:interface",
+	"PairingCandidateController":             "type:interface",
 	"PairingCandidateQueuer":                 "type:interface",
 	"RemoteEntityScenarios":                  "type:struct",
 	"ServiceInterface":                       "type:interface",
@@ -91,6 +92,10 @@ var servicePackageObjectAllowlist = map[string]string{
 var fixtureServicePackageObjectAllowlist = map[string]string{"Service": "type:struct"}
 
 var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
+	"PairingCandidateController": stringSet(
+		"ConnectPairingCandidate",
+		"SelectPairingCandidate",
+	),
 	"PairingCandidateQueuer": stringSet(
 		"QueuePairingCandidate",
 	),
@@ -137,6 +142,7 @@ var serviceMethodAllowlist = stringSet(
 	"OutgoingAttemptConnectionClosed",
 	"OutgoingAttemptHandshakeStateUpdate",
 	"PairingDetailForSki",
+	"ConnectPairingCandidate",
 	"QueuePairingCandidate",
 	"RegisterRemoteSKI",
 	"RemoteSKIConnected",
@@ -144,6 +150,7 @@ var serviceMethodAllowlist = stringSet(
 	"RemoteServiceForSKI",
 	"ServicePairingDetailUpdate",
 	"ServiceShipIDUpdate",
+	"SelectPairingCandidate",
 	"SetAutoAccept",
 	"SetLogging",
 	"SetPairingRegistration",
@@ -159,6 +166,7 @@ var serviceMethodAllowlist = stringSet(
 
 var serviceCapabilityTypeAllowlist = stringSet(
 	"listenerPolicyHub",
+	"pairingCandidateControllerHub",
 	"pairingCandidateHub",
 	"pairingRegistrationHub",
 )
@@ -233,6 +241,50 @@ func TestPairingCandidateReaderEndpointRedactedFieldSetIsSupplyChainFrozen(t *te
 		"CandidateRef", "Name", "SKI", "Identifier", "Brand", "Type", "Model",
 	)); len(violations) != 0 {
 		t.Fatalf("PairingCandidateRef field freeze failed:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func TestPairingCandidateControllerOpaqueReservationSignatureIsSupplyChainFrozen(t *testing.T) {
+	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
+	controller, ok := view.pkg.Scope().Lookup("PairingCandidateController").(*types.TypeName)
+	if !ok {
+		t.Fatal("missing api PairingCandidateController")
+	}
+	reservationType := func(value types.Type) bool {
+		named, ok := types.Unalias(value).(*types.Named)
+		return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == shipPackagePrefix+"/api" &&
+			named.Obj().Name() == "PairingCandidateReservation"
+	}
+
+	selectMethod := types.NewMethodSet(controller.Type()).Lookup(view.pkg, "SelectPairingCandidate")
+	if selectMethod == nil {
+		t.Fatal("missing PairingCandidateController.SelectPairingCandidate")
+	}
+	selectSignature, ok := selectMethod.Obj().Type().(*types.Signature)
+	if !ok || selectSignature.Params().Len() != 2 || selectSignature.Results().Len() != 2 {
+		t.Fatalf("SelectPairingCandidate signature = %s, want two inputs and two outputs", selectMethod.Obj().Type())
+	}
+	for index := 0; index < 2; index++ {
+		if selectSignature.Params().At(index).Type() != types.Typ[types.String] {
+			t.Fatalf("SelectPairingCandidate input %d = %s, want string", index, selectSignature.Params().At(index).Type())
+		}
+	}
+	if !reservationType(selectSignature.Results().At(0).Type()) ||
+		!types.Identical(selectSignature.Results().At(1).Type(), types.Universe.Lookup("error").Type()) {
+		t.Fatalf("SelectPairingCandidate outputs = %s, want (shipapi.PairingCandidateReservation, error)", selectSignature.Results())
+	}
+
+	connectMethod := types.NewMethodSet(controller.Type()).Lookup(view.pkg, "ConnectPairingCandidate")
+	if connectMethod == nil {
+		t.Fatal("missing PairingCandidateController.ConnectPairingCandidate")
+	}
+	connectSignature, ok := connectMethod.Obj().Type().(*types.Signature)
+	if !ok || connectSignature.Params().Len() != 1 || connectSignature.Results().Len() != 1 {
+		t.Fatalf("ConnectPairingCandidate signature = %s, want one input and one output", connectMethod.Obj().Type())
+	}
+	if !reservationType(connectSignature.Params().At(0).Type()) ||
+		!types.Identical(connectSignature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
+		t.Fatalf("ConnectPairingCandidate signature = %s, want (shipapi.PairingCandidateReservation) error", connectMethod.Obj().Type())
 	}
 }
 
