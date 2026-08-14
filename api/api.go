@@ -98,6 +98,13 @@ type PairingCandidateController interface {
 	ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error
 }
 
+// TrustedRemoteRetryController is an experimental dependency-fork capability
+// for one target-specific reconnect request. The caller supplies only the
+// complete remote SKI; SHIP retains endpoint and trust ownership.
+type TrustedRemoteRetryController interface {
+	RetryTrustedRemote(expectedSKI string) error
+}
+
 // PairingCandidateReader is an experimental internal dependency-fork callback
 // for endpoint-redacted SHIP pairing candidate references. Discovery identity
 // fields remain untrusted peer claims. The owner must not forward these values

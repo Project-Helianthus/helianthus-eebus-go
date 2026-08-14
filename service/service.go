@@ -64,8 +64,10 @@ type listenerPolicyHub interface {
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
 type pairingCandidateHub = shipapi.PairingCandidateQueuer
 type pairingCandidateControllerHub = shipapi.PairingCandidateController
+type trustedRemoteRetryHub = shipapi.TrustedRemoteRetryController
 
 var errPairingCandidateServiceTerminal = errors.New("pairing candidate queue is unavailable after service shutdown")
+var errTrustedRemoteRetryServiceTerminal = errors.New("trusted remote retry is unavailable after service shutdown")
 
 type lifecycleState uint8
 
@@ -198,6 +200,7 @@ func NewServiceWithOptions(
 var _ api.ServiceInterface = (*Service)(nil)
 var _ api.PairingCandidateQueuer = (*Service)(nil)
 var _ api.PairingCandidateController = (*Service)(nil)
+var _ api.TrustedRemoteRetryController = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
 func (s *Service) Setup() error {
@@ -675,4 +678,25 @@ func (s *Service) ConnectPairingCandidate(reservation shipapi.PairingCandidateRe
 		return errors.New("connections hub does not support split pairing candidate control")
 	}
 	return controller.ConnectPairingCandidate(reservation)
+}
+
+// RetryTrustedRemote forwards only the complete remote SKI to SHIP. Discovery
+// endpoint selection, retry admission, and durable trust remain SHIP-owned.
+func (s *Service) RetryTrustedRemote(expectedSKI string) error {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errTrustedRemoteRetryServiceTerminal
+	}
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is not ready")
+	}
+	controller, ok := hub.(trustedRemoteRetryHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support trusted remote retry")
+	}
+	return controller.RetryTrustedRemote(expectedSKI)
 }
