@@ -74,6 +74,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"TimeSeriesClientInterface":              "type:interface",
 	"TimeSeriesCommonInterface":              "type:interface",
 	"TimeSeriesServerInterface":              "type:interface",
+	"TrustedRemoteRetryController":           "type:interface",
 	"UseCaseBaseInterface":                   "type:interface",
 	"UseCaseInterface":                       "type:interface",
 	"UseCaseScenario":                        "type:struct",
@@ -101,6 +102,9 @@ var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 	),
 	"PairingCandidateReader": stringSet(
 		"VisiblePairingCandidatesUpdated",
+	),
+	"TrustedRemoteRetryController": stringSet(
+		"RetryTrustedRemote",
 	),
 	"ServiceInterface": stringSet(
 		"AddUseCase",
@@ -148,6 +152,7 @@ var serviceMethodAllowlist = stringSet(
 	"RemoteSKIConnected",
 	"RemoteSKIDisconnected",
 	"RemoteServiceForSKI",
+	"RetryTrustedRemote",
 	"ServicePairingDetailUpdate",
 	"ServiceShipIDUpdate",
 	"SelectPairingCandidate",
@@ -169,6 +174,7 @@ var serviceCapabilityTypeAllowlist = stringSet(
 	"pairingCandidateControllerHub",
 	"pairingCandidateHub",
 	"pairingRegistrationHub",
+	"trustedRemoteRetryHub",
 )
 
 type typedPackage struct {
@@ -285,6 +291,27 @@ func TestPairingCandidateControllerOpaqueReservationSignatureIsSupplyChainFrozen
 	if !reservationType(connectSignature.Params().At(0).Type()) ||
 		!types.Identical(connectSignature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
 		t.Fatalf("ConnectPairingCandidate signature = %s, want (shipapi.PairingCandidateReservation) error", connectMethod.Obj().Type())
+	}
+}
+
+func TestTrustedRemoteRetryControllerIdentityOnlySignatureIsSupplyChainFrozen(t *testing.T) {
+	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
+	controller, ok := view.pkg.Scope().Lookup("TrustedRemoteRetryController").(*types.TypeName)
+	if !ok {
+		t.Fatal("missing api TrustedRemoteRetryController")
+	}
+
+	method := types.NewMethodSet(controller.Type()).Lookup(view.pkg, "RetryTrustedRemote")
+	if method == nil {
+		t.Fatal("missing TrustedRemoteRetryController.RetryTrustedRemote")
+	}
+	signature, ok := method.Obj().Type().(*types.Signature)
+	if !ok || signature.Params().Len() != 1 || signature.Results().Len() != 1 {
+		t.Fatalf("RetryTrustedRemote signature = %s, want one input and one output", method.Obj().Type())
+	}
+	if signature.Params().At(0).Type() != types.Typ[types.String] ||
+		!types.Identical(signature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
+		t.Fatalf("RetryTrustedRemote signature = %s, want (string) error", method.Obj().Type())
 	}
 }
 
