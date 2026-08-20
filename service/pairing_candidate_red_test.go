@@ -236,6 +236,26 @@ func TestServicePINPairingFailsClosedWithoutDownstreamCall(t *testing.T) {
 			t.Fatal("accepted hub without PIN pairing capability")
 		}
 	})
+
+	t.Run("typed nil hub", func(t *testing.T) {
+		var hub *pairingCandidatePINControllerHubSpy
+		service := &Service{connectionsHub: hub}
+		if err := service.ConnectPairingCandidateWithPIN(reservation, provider); err == nil {
+			t.Fatal("accepted typed-nil PIN pairing hub")
+		}
+	})
+
+	t.Run("typed nil provider", func(t *testing.T) {
+		hub := &pairingCandidatePINControllerHubSpy{}
+		service := &Service{connectionsHub: hub}
+		var typedNil *pairingCandidatePINProviderSpy
+		if err := service.ConnectPairingCandidateWithPIN(reservation, typedNil); !errors.Is(err, shipapi.ErrPINProviderInvalid) {
+			t.Fatalf("typed-nil provider error = %v, want %v", err, shipapi.ErrPINProviderInvalid)
+		}
+		if got := len(hub.snapshotPINConnects()); got != 0 {
+			t.Fatalf("typed-nil provider forwarded %d PIN connects", got)
+		}
+	})
 }
 
 func TestServiceSplitPairingCandidateControlFailsClosed(t *testing.T) {

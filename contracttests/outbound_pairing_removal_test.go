@@ -64,6 +64,7 @@ var apiPackageObjectAllowlist = map[string]string{
 	"NewConfiguration":                       "func",
 	"PairingCandidateReader":                 "type:interface",
 	"PairingCandidateController":             "type:interface",
+	"PairingCandidatePINController":          "type:interface",
 	"PairingCandidateQueuer":                 "type:interface",
 	"RemoteEntityScenarios":                  "type:struct",
 	"ServiceInterface":                       "type:interface",
@@ -96,6 +97,9 @@ var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 	"PairingCandidateController": stringSet(
 		"ConnectPairingCandidate",
 		"SelectPairingCandidate",
+	),
+	"PairingCandidatePINController": stringSet(
+		"ConnectPairingCandidateWithPIN",
 	),
 	"PairingCandidateQueuer": stringSet(
 		"QueuePairingCandidate",
@@ -147,6 +151,7 @@ var serviceMethodAllowlist = stringSet(
 	"OutgoingAttemptHandshakeStateUpdate",
 	"PairingDetailForSki",
 	"ConnectPairingCandidate",
+	"ConnectPairingCandidateWithPIN",
 	"QueuePairingCandidate",
 	"RegisterRemoteSKI",
 	"RemoteSKIConnected",
@@ -172,6 +177,7 @@ var serviceMethodAllowlist = stringSet(
 var serviceCapabilityTypeAllowlist = stringSet(
 	"listenerPolicyHub",
 	"pairingCandidateControllerHub",
+	"pairingCandidatePINControllerHub",
 	"pairingCandidateHub",
 	"pairingRegistrationHub",
 	"trustedRemoteRetryHub",
@@ -291,6 +297,33 @@ func TestPairingCandidateControllerOpaqueReservationSignatureIsSupplyChainFrozen
 	if !reservationType(connectSignature.Params().At(0).Type()) ||
 		!types.Identical(connectSignature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
 		t.Fatalf("ConnectPairingCandidate signature = %s, want (shipapi.PairingCandidateReservation) error", connectMethod.Obj().Type())
+	}
+}
+
+func TestPairingCandidatePINControllerOpaqueSignatureIsSupplyChainFrozen(t *testing.T) {
+	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
+	controller, ok := view.pkg.Scope().Lookup("PairingCandidatePINController").(*types.TypeName)
+	if !ok {
+		t.Fatal("missing api PairingCandidatePINController")
+	}
+	method := types.NewMethodSet(controller.Type()).Lookup(view.pkg, "ConnectPairingCandidateWithPIN")
+	if method == nil {
+		t.Fatal("missing PairingCandidatePINController.ConnectPairingCandidateWithPIN")
+	}
+	signature, ok := method.Obj().Type().(*types.Signature)
+	if !ok || signature.Params().Len() != 2 || signature.Results().Len() != 1 {
+		t.Fatalf("ConnectPairingCandidateWithPIN signature = %s, want two inputs and one output", method.Obj().Type())
+	}
+	reservation, ok := types.Unalias(signature.Params().At(0).Type()).(*types.Named)
+	if !ok || reservation.Obj().Pkg() == nil || reservation.Obj().Pkg().Path() != shipPackagePrefix+"/api" || reservation.Obj().Name() != "PairingCandidateReservation" {
+		t.Fatalf("ConnectPairingCandidateWithPIN reservation = %s, want shipapi.PairingCandidateReservation", signature.Params().At(0).Type())
+	}
+	provider, ok := types.Unalias(signature.Params().At(1).Type()).(*types.Named)
+	if !ok || provider.Obj().Pkg() == nil || provider.Obj().Pkg().Path() != shipPackagePrefix+"/api" || provider.Obj().Name() != "TransientPINProvider" {
+		t.Fatalf("ConnectPairingCandidateWithPIN provider = %s, want shipapi.TransientPINProvider", signature.Params().At(1).Type())
+	}
+	if !types.Identical(signature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
+		t.Fatalf("ConnectPairingCandidateWithPIN output = %s, want error", signature.Results().At(0).Type())
 	}
 }
 

@@ -64,6 +64,7 @@ type listenerPolicyHub interface {
 type pairingRegistrationHub = shipapi.PairingRegistrationSetter
 type pairingCandidateHub = shipapi.PairingCandidateQueuer
 type pairingCandidateControllerHub = shipapi.PairingCandidateController
+type pairingCandidatePINControllerHub = shipapi.PairingCandidatePINController
 type trustedRemoteRetryHub = shipapi.TrustedRemoteRetryController
 
 var errPairingCandidateServiceTerminal = errors.New("pairing candidate queue is unavailable after service shutdown")
@@ -200,6 +201,7 @@ func NewServiceWithOptions(
 var _ api.ServiceInterface = (*Service)(nil)
 var _ api.PairingCandidateQueuer = (*Service)(nil)
 var _ api.PairingCandidateController = (*Service)(nil)
+var _ api.PairingCandidatePINController = (*Service)(nil)
 var _ api.TrustedRemoteRetryController = (*Service)(nil)
 
 // Starts the service by initializeing mDNS and the server.
@@ -678,6 +680,34 @@ func (s *Service) ConnectPairingCandidate(reservation shipapi.PairingCandidateRe
 		return errors.New("connections hub does not support split pairing candidate control")
 	}
 	return controller.ConnectPairingCandidate(reservation)
+}
+
+// ConnectPairingCandidateWithPIN forwards the exact opaque reservation and
+// one-shot provider to SHIP. eebus-go neither invokes, logs, formats nor
+// persists the provider or PIN value.
+func (s *Service) ConnectPairingCandidateWithPIN(
+	reservation shipapi.PairingCandidateReservation,
+	provider shipapi.TransientPINProvider,
+) error {
+	s.lifecycleMux.Lock()
+	switch s.lifecycle {
+	case lifecycleStopping, lifecycleStopped, lifecycleTerminal:
+		s.lifecycleMux.Unlock()
+		return errPairingCandidateServiceTerminal
+	}
+	hub := s.connectionsHub
+	s.lifecycleMux.Unlock()
+	if isNilInterface(hub) {
+		return errors.New("connections hub is not ready")
+	}
+	controller, ok := hub.(pairingCandidatePINControllerHub)
+	if !ok || isNilInterface(controller) {
+		return errors.New("connections hub does not support PIN pairing candidate control")
+	}
+	if isNilInterface(provider) {
+		return shipapi.ErrPINProviderInvalid
+	}
+	return controller.ConnectPairingCandidateWithPIN(reservation, provider)
 }
 
 // RetryTrustedRemote forwards only the complete remote SKI to SHIP. Discovery

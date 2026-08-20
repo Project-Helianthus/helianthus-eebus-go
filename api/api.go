@@ -98,6 +98,18 @@ type PairingCandidateController interface {
 	ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error
 }
 
+// PairingCandidatePINController is an experimental dependency-fork capability
+// for one explicit connection of a selected SHIP reservation with a transient,
+// one-shot PIN provider. Reservation and PIN ownership remain in SHIP. This is
+// deliberately separate from PairingCandidateController so its no-PIN surface
+// stays stable.
+type PairingCandidatePINController interface {
+	ConnectPairingCandidateWithPIN(
+		reservation shipapi.PairingCandidateReservation,
+		provider shipapi.TransientPINProvider,
+	) error
+}
+
 // TrustedRemoteRetryController is an experimental dependency-fork capability
 // for one target-specific reconnect request. The caller supplies only the
 // complete remote SKI; SHIP retains endpoint and trust ownership.

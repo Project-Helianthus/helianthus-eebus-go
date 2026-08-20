@@ -5,7 +5,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.17",
+    "intended_prerelease": "v0.7.1-helianthus.18",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-eebus-go.git"
   },
@@ -22,16 +22,16 @@
         "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
       },
       "module": "github.com/Project-Helianthus/helianthus-ship-go",
-      "peeled_commit_sha": "998d84c8f33061589834eee56d5acd621769b18a",
+      "peeled_commit_sha": "ed2691fa48bab54ea111e267cf886d40876765a1",
       "provenance_manifest": {
         "path": "provenance/closure-manifest.json",
         "sha256": "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
       },
-      "ref": "refs/tags/v0.6.1-helianthus.15",
+      "ref": "refs/tags/v0.6.1-helianthus.16",
       "repository": "https://github.com/Project-Helianthus/helianthus-ship-go.git",
-      "tag_object_sha": "d0479b45562221f8d21eef4dc3017cce924f3660",
-      "tree_sha": "642a5e398eec5660fc9bc5e18d9fe7adfba1c43f",
-      "version": "v0.6.1-helianthus.15"
+      "tag_object_sha": "d5684e3a17fbd8765e5a17c53bb63bf517d19467",
+      "tree_sha": "35df33c54e6d6a88db59d7c012b1362307b25526",
+      "version": "v0.6.1-helianthus.16"
     },
     {
       "license": {

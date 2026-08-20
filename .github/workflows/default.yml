@@ -40,8 +40,8 @@ jobs:
           python3 scripts/verify_dependency_closure.py \
             --repo . \
             --manifest provenance/closure-manifest.json \
-            --expected-prerelease v0.7.1-helianthus.17 \
-            --expected-reviewed-dependency github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.15 \
+            --expected-prerelease v0.7.1-helianthus.18 \
+            --expected-reviewed-dependency github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.16 \
             --expected-reviewed-dependency github.com/Project-Helianthus/helianthus-spine-go@v0.7.1-helianthus.9 \
             --inventory-output "$closure_dir/dependency-control-paths.nul" \
             --evidence-output "$closure_dir/dependency-control-closure.json"
