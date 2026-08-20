@@ -40,6 +40,61 @@ type pairingCandidateControllerHubSpy struct {
 	shutdownRelease chan struct{}
 }
 
+// pairingCandidatePINControllerHubSpy models only the additive SHIP .16
+// capability. The PIN remains opaque to the eebus-go service; the spy records
+// provider identity and must never invoke or inspect it.
+type pairingCandidatePINControllerHubSpy struct {
+	shipapi.HubInterface
+	mux        sync.Mutex
+	connects   []pairingCandidatePINConnect
+	connectErr error
+}
+
+type pairingCandidatePINConnect struct {
+	reservation shipapi.PairingCandidateReservation
+	provider    shipapi.TransientPINProvider
+}
+
+func (hub *pairingCandidatePINControllerHubSpy) ConnectPairingCandidateWithPIN(
+	reservation shipapi.PairingCandidateReservation,
+	provider shipapi.TransientPINProvider,
+) error {
+	hub.mux.Lock()
+	defer hub.mux.Unlock()
+	hub.connects = append(hub.connects, pairingCandidatePINConnect{
+		reservation: reservation,
+		provider:    provider,
+	})
+	return hub.connectErr
+}
+
+func (hub *pairingCandidatePINControllerHubSpy) snapshotPINConnects() []pairingCandidatePINConnect {
+	hub.mux.Lock()
+	defer hub.mux.Unlock()
+	return append([]pairingCandidatePINConnect(nil), hub.connects...)
+}
+
+type pairingCandidatePINProviderSpy struct {
+	mux   sync.Mutex
+	calls int
+}
+
+func (provider *pairingCandidatePINProviderSpy) WithTransientPIN(
+	_remoteSKI string,
+	_consume func([]byte) error,
+) (bool, error) {
+	provider.mux.Lock()
+	defer provider.mux.Unlock()
+	provider.calls++
+	return false, nil
+}
+
+func (provider *pairingCandidatePINProviderSpy) callCount() int {
+	provider.mux.Lock()
+	defer provider.mux.Unlock()
+	return provider.calls
+}
+
 func (hub *pairingCandidateControllerHubSpy) SelectPairingCandidate(
 	candidateRef string,
 	expectedSKI string,
@@ -133,6 +188,54 @@ func TestServiceForwardsSplitPairingCandidateControlExactly(t *testing.T) {
 	if len(connectCalls) != 1 || !connectCalls[0].Matches(wantReservation) {
 		t.Fatalf("connect calls = %v, want exact opaque reservation", connectCalls)
 	}
+}
+
+func TestServiceForwardsOpaqueReservationAndTransientPINProviderExactlyOnce(t *testing.T) {
+	var token [32]byte
+	token[0] = 0x32
+	wantReservation := shipapi.NewPairingCandidateReservation(token)
+	provider := &pairingCandidatePINProviderSpy{}
+	hub := &pairingCandidatePINControllerHubSpy{}
+	service := &Service{connectionsHub: hub}
+
+	if err := service.ConnectPairingCandidateWithPIN(wantReservation, provider); err != nil {
+		t.Fatalf("connect pairing candidate with transient PIN: %v", err)
+	}
+
+	connects := hub.snapshotPINConnects()
+	if len(connects) != 1 || !connects[0].reservation.Matches(wantReservation) || connects[0].provider != provider {
+		t.Fatalf("PIN connects = %#v, want exact opaque reservation and provider once", connects)
+	}
+	if got := provider.callCount(); got != 0 {
+		t.Fatalf("eebus-go consumed transient PIN provider %d times, want 0", got)
+	}
+}
+
+func TestServicePINPairingFailsClosedWithoutDownstreamCall(t *testing.T) {
+	var token [32]byte
+	token[0] = 0x66
+	reservation := shipapi.NewPairingCandidateReservation(token)
+	provider := &pairingCandidatePINProviderSpy{}
+
+	for _, lifecycle := range []lifecycleState{lifecycleStopping, lifecycleStopped, lifecycleTerminal} {
+		t.Run("terminal "+lifecycleName(lifecycle), func(t *testing.T) {
+			hub := &pairingCandidatePINControllerHubSpy{}
+			service := &Service{connectionsHub: hub, lifecycle: lifecycle}
+			if err := service.ConnectPairingCandidateWithPIN(reservation, provider); !errors.Is(err, errPairingCandidateServiceTerminal) {
+				t.Fatalf("connect error = %v, want %v", err, errPairingCandidateServiceTerminal)
+			}
+			if got := len(hub.snapshotPINConnects()); got != 0 {
+				t.Fatalf("terminal service forwarded %d PIN connects", got)
+			}
+		})
+	}
+
+	t.Run("unsupported", func(t *testing.T) {
+		service := &Service{connectionsHub: &hubRuntimeRecorder{}}
+		if err := service.ConnectPairingCandidateWithPIN(reservation, provider); err == nil {
+			t.Fatal("accepted hub without PIN pairing capability")
+		}
+	})
 }
 
 func TestServiceSplitPairingCandidateControlFailsClosed(t *testing.T) {
