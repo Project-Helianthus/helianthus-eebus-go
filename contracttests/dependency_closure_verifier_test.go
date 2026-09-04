@@ -317,7 +317,8 @@ func splitHelianthusVersion(t *testing.T, version string) (string, int) {
 	if index < 0 {
 		t.Fatalf("reviewed version must carry a Helianthus sequence: %s", version)
 	}
-	sequence, err := strconv.Atoi(version[index+len(marker):])
+	sequenceText := strings.SplitN(version[index+len(marker):], ".", 2)[0]
+	sequence, err := strconv.Atoi(sequenceText)
 	if err != nil || sequence <= 0 {
 		t.Fatalf("reviewed version must end in a positive numeric Helianthus sequence: %s", version)
 	}

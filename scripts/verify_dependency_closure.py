@@ -329,13 +329,25 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             return False, {}, []
         module = dependency.get("module")
         version = dependency.get("version")
+        ref = dependency.get("ref")
+        peeled_commit = dependency.get("peeled_commit_sha")
+        tag_object = dependency.get("tag_object_sha")
+        tagged_version = ref == "refs/tags/" + version if isinstance(version, str) else False
+        commit_version = (
+            isinstance(ref, str)
+            and SHA40_RE.fullmatch(ref) is not None
+            and isinstance(version, str)
+            and version.endswith("-" + ref[:12])
+            and peeled_commit == ref
+            and tag_object == ref
+        )
         if (
             module not in PROJECT_MODULES
             or not isinstance(version, str)
             or module in reviewed
             or not isinstance(dependency.get("repository"), str)
             or not dependency["repository"]
-            or dependency.get("ref") != "refs/tags/" + version
+            or not (tagged_version or commit_version)
             or not all(
                 isinstance(dependency.get(field), str)
                 and SHA40_RE.fullmatch(dependency[field])
@@ -700,7 +712,8 @@ def verify_git_ref(
         add_violation(violations, violation_path, "git_ref", "git_ref_fetch_failed")
         return None
 
-    if object_type != "tag":
+    expected_object_type = "tag" if ref.startswith("refs/tags/") else "commit"
+    if object_type != expected_object_type:
         add_violation(violations, violation_path, "git_ref", "tag_object_type_mismatch")
     for field, reason in (
         ("tag_object_sha", "tag_object_mismatch"),

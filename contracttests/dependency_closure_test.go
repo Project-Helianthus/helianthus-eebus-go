@@ -20,7 +20,7 @@ const (
 	canonicalModule   = "github.com/Project-Helianthus/helianthus-eebus-go"
 	canonicalShip     = "github.com/Project-Helianthus/helianthus-ship-go"
 	canonicalSpine    = "github.com/Project-Helianthus/helianthus-spine-go"
-	canonicalShipVer  = "v0.6.1-helianthus.18"
+	canonicalShipVer  = "v0.6.1-helianthus.18.0.20260904230526-9d38bfe04d57"
 	canonicalSpineVer = "v0.7.1-helianthus.9"
 	canonicalVer      = canonicalShipVer
 	upstreamSpine     = "github.com/enbility/spine-go"
@@ -195,10 +195,10 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		t.Fatalf("manifest reviewed_dependencies = %d; want exactly reviewed SHIP and SPINE", len(manifest.ReviewedDependencies))
 	}
 	for _, dependency := range []struct {
-		name, module, version, tag, commit, tree, manifestDigest string
+		name, module, version, ref, tag, commit, tree, manifestDigest string
 	}{
-		{"ship", canonicalShip, canonicalShipVer, "54795e05f1e73feb1a3424ea269d0961dc81c016", "84eb65407f694f0a2eaee323d7afceae5cb4d115", "143fddb393448bcea7776220ba5cfaedf7dfeb30", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
-		{"spine", canonicalSpine, canonicalSpineVer, "16ca565de6c93c2e43ee124fc6b3b098f0beb85f", "b0cdd8653ccc0c0d0133706172541e80179de818", "17ac7df9df37770f270e313ac9650f77ae282bcd", "2e7fddb971a0ff56de788eab73231ec5f3d940a1fd454ced323fd70df4e48d64"},
+		{"ship", canonicalShip, canonicalShipVer, "9d38bfe04d57e7c8c73c59c1ddfc9b521e5045b0", "9d38bfe04d57e7c8c73c59c1ddfc9b521e5045b0", "9d38bfe04d57e7c8c73c59c1ddfc9b521e5045b0", "4089f6465ad29e21c5c3fad070f94fa33b06051e", "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+		{"spine", canonicalSpine, canonicalSpineVer, "refs/tags/" + canonicalSpineVer, "16ca565de6c93c2e43ee124fc6b3b098f0beb85f", "b0cdd8653ccc0c0d0133706172541e80179de818", "17ac7df9df37770f270e313ac9650f77ae282bcd", "2e7fddb971a0ff56de788eab73231ec5f3d940a1fd454ced323fd70df4e48d64"},
 	} {
 		var reviewed *struct {
 			Module     string `json:"module"`
@@ -229,7 +229,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		dependencyWants := []struct{ name, got, want string }{
 			{"module", reviewed.Module, dependency.module}, {"version", reviewed.Version, dependency.version},
 			{"repository", reviewed.Repository, "https://github.com/Project-Helianthus/helianthus-" + dependency.name + "-go.git"},
-			{"ref", reviewed.Ref, "refs/tags/" + dependency.version},
+			{"ref", reviewed.Ref, dependency.ref},
 			{"tag_object_sha", reviewed.Tag, dependency.tag}, {"peeled_commit_sha", reviewed.Commit, dependency.commit},
 			{"tree_sha", reviewed.Tree, dependency.tree}, {"license.path", reviewed.License.Path, "LICENSE"},
 			{"license.sha256", reviewed.License.SHA256, "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"},
