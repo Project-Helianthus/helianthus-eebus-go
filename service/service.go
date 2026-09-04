@@ -180,6 +180,7 @@ func NewServiceWithOptions(
 	service := &Service{
 		configuration:               configuration,
 		serviceHandler:              serviceHandler,
+		isPairingPossible:           true,
 		connectionsHubFactory:       defaultConnectionsHubFactory,
 		scopedConnectionsHubFactory: defaultScopedConnectionsHubFactory,
 	}

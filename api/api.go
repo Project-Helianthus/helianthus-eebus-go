@@ -76,8 +76,8 @@ type ServiceInterface interface {
 	// Call this with `true` e.g. if the user is currently using a web interface
 	// where an incoming request can be accepted or denied
 	//
-	// Default is set to false, meaning every incoming pairing request will be
-	// automatically denied
+	// Default is true so an incoming request remains pending and observable
+	// until the user accepts or denies it. This does not enable auto accept.
 	SetPairingRegistration(allow bool) error
 }
 
