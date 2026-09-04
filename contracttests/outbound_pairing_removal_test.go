@@ -105,7 +105,7 @@ var apiInterfaceMethodAllowlists = map[string]map[string]struct{}{
 		"QueuePairingCandidate",
 	),
 	"PairingCandidateReader": stringSet(
-		"VisiblePairingCandidatesUpdated",
+		"VisiblePairingCandidateDiscoverySnapshotUpdated",
 	),
 	"TrustedRemoteRetryController": stringSet(
 		"RetryTrustedRemote",
@@ -172,6 +172,7 @@ var serviceMethodAllowlist = stringSet(
 	"UnregisterRemoteSKI",
 	"VisibleRemoteServicesUpdated",
 	"VisiblePairingCandidatesUpdated",
+	"VisiblePairingCandidateDiscoverySnapshotUpdated",
 )
 
 var serviceCapabilityTypeAllowlist = stringSet(
@@ -206,16 +207,16 @@ func TestOutboundPairingRemovalUsesTypedAPISurface(t *testing.T) {
 	}
 }
 
-func TestPairingCandidateReaderEndpointRedactedFieldSetIsSupplyChainFrozen(t *testing.T) {
+func TestPairingCandidateReaderPreservesNativeDiscoverySnapshotV1(t *testing.T) {
 	view := loadTypedRepositoryPackages(t)[canonicalModule+"/api"]
 	reader, ok := view.pkg.Scope().Lookup("PairingCandidateReader").(*types.TypeName)
 	if !ok {
 		t.Fatal("missing api PairingCandidateReader")
 	}
 
-	method := types.NewMethodSet(reader.Type()).Lookup(view.pkg, "VisiblePairingCandidatesUpdated")
+	method := types.NewMethodSet(reader.Type()).Lookup(view.pkg, "VisiblePairingCandidateDiscoverySnapshotUpdated")
 	if method == nil {
-		t.Fatal("missing PairingCandidateReader.VisiblePairingCandidatesUpdated")
+		t.Fatal("missing PairingCandidateReader.VisiblePairingCandidateDiscoverySnapshotUpdated")
 	}
 	signature, ok := method.Obj().Type().(*types.Signature)
 	if !ok || signature.Params().Len() != 2 || signature.Results().Len() != 0 {
@@ -225,34 +226,30 @@ func TestPairingCandidateReaderEndpointRedactedFieldSetIsSupplyChainFrozen(t *te
 		t.Fatalf("PairingCandidateReader first input = %s, want api.ServiceInterface", signature.Params().At(0).Type())
 	}
 
-	candidates, ok := types.Unalias(signature.Params().At(1).Type()).(*types.Slice)
-	if !ok {
-		t.Fatalf("PairingCandidateReader second input = %s, want []shipapi.PairingCandidateRef", signature.Params().At(1).Type())
+	snapshot, ok := types.Unalias(signature.Params().At(1).Type()).(*types.Named)
+	if !ok || snapshot.Obj().Pkg() == nil || snapshot.Obj().Pkg().Path() != shipPackagePrefix+"/api" ||
+		snapshot.Obj().Name() != "PairingCandidateDiscoverySnapshotV1" {
+		t.Fatalf("PairingCandidateReader snapshot = %s, want shipapi.PairingCandidateDiscoverySnapshotV1", signature.Params().At(1).Type())
 	}
-	candidateRef, ok := types.Unalias(candidates.Elem()).(*types.Named)
-	if !ok || candidateRef.Obj().Pkg() == nil || candidateRef.Obj().Pkg().Path() != shipPackagePrefix+"/api" || candidateRef.Obj().Name() != "PairingCandidateRef" {
-		t.Fatalf("PairingCandidateReader element = %s, want shipapi.PairingCandidateRef", candidates.Elem())
+	fields, ok := snapshot.Underlying().(*types.Struct)
+	if !ok || fields.NumFields() != 3 {
+		t.Fatalf("PairingCandidateDiscoverySnapshotV1 shape = %s, want three fields", snapshot.Underlying())
 	}
-
-	fields, ok := candidateRef.Underlying().(*types.Struct)
-	if !ok {
-		t.Fatalf("PairingCandidateRef underlying type = %T, want struct", candidateRef.Underlying())
-	}
-	actual := make(map[string]struct{}, fields.NumFields())
+	actual := make(map[string]types.Type, fields.NumFields())
 	for index := 0; index < fields.NumFields(); index++ {
-		field := fields.Field(index)
-		if field.Type() != types.Typ[types.String] {
-			t.Fatalf("PairingCandidateRef field %s type = %s, want string", field.Name(), field.Type())
-		}
-		actual[field.Name()] = struct{}{}
+		actual[fields.Field(index).Name()] = fields.Field(index).Type()
 	}
-	// This exact allowlist is a supply-chain anti-leak gate. Identity fields are
-	// untrusted discovery claims; forbidding additions prevents endpoint, path,
-	// address, or port material from silently entering this dependency contract.
-	if violations := compareStringSets("PairingCandidateRef field", actual, stringSet(
-		"CandidateRef", "Name", "SKI", "Identifier", "Brand", "Type", "Model",
-	)); len(violations) != 0 {
-		t.Fatalf("PairingCandidateRef field freeze failed:\n%s", strings.Join(violations, "\n"))
+	if actual["ObservationRevision"] != types.Typ[types.Uint64] || actual["NewEntries"] != types.Typ[types.Bool] {
+		t.Fatalf("snapshot context fields = %v, want uint64 revision and bool new-entries", actual)
+	}
+	candidates, ok := types.Unalias(actual["Candidates"]).(*types.Slice)
+	if !ok {
+		t.Fatalf("snapshot Candidates = %s, want native observation slice", actual["Candidates"])
+	}
+	observation, ok := types.Unalias(candidates.Elem()).(*types.Named)
+	if !ok || observation.Obj().Pkg() == nil || observation.Obj().Pkg().Path() != shipPackagePrefix+"/api" ||
+		observation.Obj().Name() != "PairingCandidateDiscoveryObservationV1" {
+		t.Fatalf("snapshot candidate = %s, want shipapi.PairingCandidateDiscoveryObservationV1", candidates.Elem())
 	}
 }
 

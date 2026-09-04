@@ -117,14 +117,16 @@ type TrustedRemoteRetryController interface {
 	RetryTrustedRemote(expectedSKI string) error
 }
 
-// PairingCandidateReader is an experimental internal dependency-fork callback
-// for endpoint-redacted SHIP pairing candidate references. Discovery identity
-// fields remain untrusted peer claims. The owner must not forward these values
-// into Runtime, Snapshot, PairingState, MCP, GraphQL, Portal, or Home Assistant.
-// This contract is separate from ServiceReaderInterface and is not a stable
-// Helianthus product API.
+// PairingCandidateReader receives an immutable native SHIP discovery snapshot.
+// Discovery identity and endpoint fields remain untrusted peer claims. Reading
+// them does not select, connect, approve, reject, or mutate pairing or trust.
+// This provider-local contract is separate from ServiceReaderInterface; any
+// gateway or consumer projection is owned by its downstream integration work.
 type PairingCandidateReader interface {
-	VisiblePairingCandidatesUpdated(service ServiceInterface, candidates []shipapi.PairingCandidateRef)
+	VisiblePairingCandidateDiscoverySnapshotUpdated(
+		service ServiceInterface,
+		snapshot shipapi.PairingCandidateDiscoverySnapshotV1,
+	)
 }
 
 // interface for receiving data for specific events from Service
