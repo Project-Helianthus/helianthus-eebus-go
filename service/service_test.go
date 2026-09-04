@@ -217,6 +217,32 @@ func (s *ServiceSuite) Test_ManualPairingAvailabilityAdvertisesWithoutAutoAccept
 	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
 }
 
+func (s *ServiceSuite) Test_DefaultPairingRegistrationExposesPendingWithoutAutomaticTrust() {
+	certificate, err := cert.CreateCertificate("unit", "org", "de", "cn")
+	assert.NoError(s.T(), err)
+	s.config.SetCertificate(certificate)
+
+	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub}
+	s.sut.connectionsHubFactory = func(
+		shipapi.HubReaderInterface,
+		shipapi.MdnsInterface,
+		int,
+		tls.Certificate,
+		*shipapi.ServiceDetails,
+	) shipapi.HubInterface {
+		return hub
+	}
+
+	assert.NoError(s.T(), s.sut.Setup())
+	assert.Equal(s.T(), []bool{true}, hub.Values())
+	assert.True(s.T(), s.sut.AllowWaitingForTrust("synthetic-remote-ski"))
+	assert.False(s.T(), s.sut.IsAutoAcceptEnabled())
+
+	detail := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil)
+	s.serviceReader.EXPECT().ServicePairingDetailUpdate("synthetic-remote-ski", detail).Return().Once()
+	s.sut.ServicePairingDetailUpdate("synthetic-remote-ski", detail)
+}
+
 func (s *ServiceSuite) Test_ManualPairingRegistrationErrorIsReturned() {
 	wantErr := errors.New("announce failed")
 	hub := &pairingRegistrationHubSpy{HubInterface: s.conHub, err: wantErr}
