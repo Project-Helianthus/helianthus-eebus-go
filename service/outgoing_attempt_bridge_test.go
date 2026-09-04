@@ -143,6 +143,9 @@ func (*hubRuntimeRecorder) RegisterRemoteSKI(string)     {}
 func (*hubRuntimeRecorder) UnregisterRemoteSKI(string)   {}
 func (*hubRuntimeRecorder) DisconnectSKI(string, string) {}
 func (*hubRuntimeRecorder) CancelPairingWithSKI(string)  {}
+func (*hubRuntimeRecorder) SetPairingRegistration(bool) error {
+	return nil
+}
 
 var _ shipapi.HubInterface = (*hubRuntimeRecorder)(nil)
 

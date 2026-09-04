@@ -32,7 +32,7 @@ func (reader *pairingCandidateVisibilityReader) VisiblePairingCandidatesUpdated(
 }
 
 var _ shipapi.PairingCandidateHubReaderInterface = (*Service)(nil)
-var _ api.PairingCandidateReader = (*pairingCandidateVisibilityReader)(nil)
+var _ legacyPairingCandidateReader = (*pairingCandidateVisibilityReader)(nil)
 
 func TestServiceForwardsClonedAndDeterministicallyOrderedPairingCandidates(t *testing.T) {
 	reader := &pairingCandidateVisibilityReader{}

@@ -151,6 +151,7 @@ type Service struct {
 	candidateDispatching   bool
 	candidateClosed        bool
 	candidateTerminal      bool
+	candidateRevision      uint64
 
 	mux sync.Mutex
 }
@@ -180,6 +181,7 @@ func NewServiceWithOptions(
 	service := &Service{
 		configuration:               configuration,
 		serviceHandler:              serviceHandler,
+		isPairingPossible:           true,
 		connectionsHubFactory:       defaultConnectionsHubFactory,
 		scopedConnectionsHubFactory: defaultScopedConnectionsHubFactory,
 	}

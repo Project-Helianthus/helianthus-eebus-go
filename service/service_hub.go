@@ -1,6 +1,8 @@
 package service
 
 import (
+	"net"
+	"net/netip"
 	"sort"
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/api"
@@ -11,6 +13,11 @@ import (
 var _ shipapi.HubReaderInterface = (*Service)(nil)
 var _ shipapi.OutgoingAttemptHubReaderInterface = (*Service)(nil)
 var _ shipapi.PairingCandidateHubReaderInterface = (*Service)(nil)
+var _ shipapi.PairingCandidateDiscoverySnapshotHubReaderInterface = (*Service)(nil)
+
+type legacyPairingCandidateReader interface {
+	VisiblePairingCandidatesUpdated(service api.ServiceInterface, candidates []shipapi.PairingCandidateRef)
+}
 
 // report a connection to a SKI
 func (s *Service) RemoteSKIConnected(ski string) {
@@ -36,35 +43,56 @@ func (s *Service) VisibleRemoteServicesUpdated(entries []shipapi.RemoteService) 
 	s.serviceHandler.VisibleRemoteServicesUpdated(s, entries)
 }
 
-// VisiblePairingCandidatesUpdated forwards only opaque, process-local SHIP
-// candidate references to an optional experimental reader.
+// VisiblePairingCandidatesUpdated retains the former endpoint-redacted callback
+// for compatibility. A native reader receives only the complete V1 callback.
 func (s *Service) VisiblePairingCandidatesUpdated(candidates []shipapi.PairingCandidateRef) {
+	if reader, ok := s.serviceHandler.(api.PairingCandidateReader); ok && !isNilInterface(reader) {
+		return
+	}
+	reader, ok := s.serviceHandler.(legacyPairingCandidateReader)
+	if !ok || isNilInterface(reader) {
+		return
+	}
+	dispatchPairingCandidateVisibility(s, pairingCandidateVisibilityEvent{
+		legacyReader: reader,
+		candidates:   cloneAndSortPairingCandidateRefs(candidates),
+	})
+}
+
+// VisiblePairingCandidateDiscoverySnapshotUpdated forwards a complete native
+// snapshot without granting any pairing, connection, or trust authority.
+func (s *Service) VisiblePairingCandidateDiscoverySnapshotUpdated(
+	snapshot shipapi.PairingCandidateDiscoverySnapshotV1,
+) {
 	reader, ok := s.serviceHandler.(api.PairingCandidateReader)
 	if !ok || isNilInterface(reader) {
 		return
 	}
-	dispatchPairingCandidateVisibility(s, reader, cloneAndSortPairingCandidateRefs(candidates))
+	dispatchPairingCandidateVisibility(s, pairingCandidateVisibilityEvent{
+		nativeReader: reader,
+		snapshot:     cloneAndSortPairingCandidateDiscoverySnapshot(snapshot),
+	})
 }
 
 type pairingCandidateVisibilityEvent struct {
-	reader     api.PairingCandidateReader
-	candidates []shipapi.PairingCandidateRef
-	done       chan struct{}
+	nativeReader api.PairingCandidateReader
+	legacyReader legacyPairingCandidateReader
+	snapshot     shipapi.PairingCandidateDiscoverySnapshotV1
+	candidates   []shipapi.PairingCandidateRef
+	done         chan struct{}
 }
 
 func dispatchPairingCandidateVisibility(
 	service *Service,
-	reader api.PairingCandidateReader,
-	candidates []shipapi.PairingCandidateRef,
+	event pairingCandidateVisibilityEvent,
 ) {
 	service.candidateVisibilityMux.Lock()
 	if service.candidateClosed {
 		service.candidateVisibilityMux.Unlock()
 		return
 	}
-	event := pairingCandidateVisibilityEvent{
-		reader:     reader,
-		candidates: candidates,
+	if !isNilInterface(event.nativeReader) {
+		service.candidateRevision = event.snapshot.ObservationRevision
 	}
 	if pending := len(service.candidateVisibility); pending > 0 &&
 		service.candidateVisibility[pending-1].done == nil {
@@ -88,23 +116,29 @@ func closePairingCandidateVisibilityAdmissions(service *Service) {
 }
 
 func emitTerminalPairingCandidateVisibility(service *Service) {
-	reader, ok := service.serviceHandler.(api.PairingCandidateReader)
-	if !ok || isNilInterface(reader) {
+	event := pairingCandidateVisibilityEvent{done: make(chan struct{})}
+	if reader, ok := service.serviceHandler.(api.PairingCandidateReader); ok && !isNilInterface(reader) {
+		event.nativeReader = reader
+	} else if reader, ok := service.serviceHandler.(legacyPairingCandidateReader); ok && !isNilInterface(reader) {
+		event.legacyReader = reader
+		event.candidates = []shipapi.PairingCandidateRef{}
+	} else {
 		return
 	}
 
-	done := make(chan struct{})
 	service.candidateVisibilityMux.Lock()
 	if service.candidateTerminal {
 		service.candidateVisibilityMux.Unlock()
 		return
 	}
 	service.candidateTerminal = true
-	service.candidateVisibility = append(service.candidateVisibility, pairingCandidateVisibilityEvent{
-		reader:     reader,
-		candidates: []shipapi.PairingCandidateRef{},
-		done:       done,
-	})
+	if !isNilInterface(event.nativeReader) {
+		event.snapshot = shipapi.PairingCandidateDiscoverySnapshotV1{
+			ObservationRevision: service.candidateRevision,
+			Candidates:          []shipapi.PairingCandidateDiscoveryObservationV1{},
+		}
+	}
+	service.candidateVisibility = append(service.candidateVisibility, event)
 	shouldDrain := !service.candidateDispatching
 	if shouldDrain {
 		service.candidateDispatching = true
@@ -113,7 +147,7 @@ func emitTerminalPairingCandidateVisibility(service *Service) {
 
 	if shouldDrain {
 		drainPairingCandidateVisibility(service)
-		<-done
+		<-event.done
 	}
 }
 
@@ -130,7 +164,11 @@ func drainPairingCandidateVisibility(service *Service) {
 		service.candidateVisibility = service.candidateVisibility[1:]
 		service.candidateVisibilityMux.Unlock()
 
-		event.reader.VisiblePairingCandidatesUpdated(service, event.candidates)
+		if !isNilInterface(event.nativeReader) {
+			event.nativeReader.VisiblePairingCandidateDiscoverySnapshotUpdated(service, event.snapshot)
+		} else {
+			event.legacyReader.VisiblePairingCandidatesUpdated(service, event.candidates)
+		}
 		if event.done != nil {
 			close(event.done)
 		}
@@ -160,6 +198,57 @@ func pairingCandidateRefLess(left, right shipapi.PairingCandidateRef) bool {
 		}
 	}
 	return false
+}
+
+func cloneAndSortPairingCandidateDiscoverySnapshot(
+	snapshot shipapi.PairingCandidateDiscoverySnapshotV1,
+) shipapi.PairingCandidateDiscoverySnapshotV1 {
+	cloned := snapshot
+	if snapshot.Candidates != nil {
+		cloned.Candidates = make([]shipapi.PairingCandidateDiscoveryObservationV1, len(snapshot.Candidates))
+		for index, candidate := range snapshot.Candidates {
+			cloned.Candidates[index] = candidate
+			cloned.Candidates[index].Addresses = clonePairingCandidateAddresses(candidate.Addresses)
+			cloned.Candidates[index].ScopedAddresses = append([]netip.Addr(nil), candidate.ScopedAddresses...)
+		}
+	}
+	sort.SliceStable(cloned.Candidates, func(left, right int) bool {
+		return pairingCandidateDiscoveryObservationLess(cloned.Candidates[left], cloned.Candidates[right])
+	})
+	return cloned
+}
+
+func clonePairingCandidateAddresses(addresses []net.IP) []net.IP {
+	if addresses == nil {
+		return nil
+	}
+	cloned := make([]net.IP, len(addresses))
+	for index, address := range addresses {
+		cloned[index] = append(net.IP(nil), address...)
+	}
+	return cloned
+}
+
+func pairingCandidateDiscoveryObservationLess(
+	left shipapi.PairingCandidateDiscoveryObservationV1,
+	right shipapi.PairingCandidateDiscoveryObservationV1,
+) bool {
+	for _, values := range [][2]string{
+		{left.CandidateRef, right.CandidateRef},
+		{left.SKI, right.SKI},
+		{left.Name, right.Name},
+		{left.Identifier, right.Identifier},
+		{left.Brand, right.Brand},
+		{left.Type, right.Type},
+		{left.Model, right.Model},
+		{left.Path, right.Path},
+		{left.Host, right.Host},
+	} {
+		if values[0] != values[1] {
+			return values[0] < values[1]
+		}
+	}
+	return left.Port < right.Port
 }
 
 // Provides the SHIP ID the remote service reported during the handshake process
