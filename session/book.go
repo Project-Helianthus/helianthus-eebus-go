@@ -23,20 +23,31 @@ type entry struct {
 	lastWasSubscribe bool
 }
 
+// peerCounter is one datagram number on one peer. Each remote numbers its own
+// datagrams, so the same counter on two peers is two different datagrams.
+type peerCounter struct {
+	peer    string
+	counter uint64
+}
+
+func counterKey(peer string, counter uint64) peerCounter {
+	return peerCounter{peer: peer, counter: counter}
+}
+
 type book struct {
 	nextID    uint
 	byKey     map[string]*entry
-	byCounter map[uint64]string
-	cancelled map[uint64]struct{}
-	releaseOf map[uint64]string
+	byCounter map[peerCounter]string
+	cancelled map[peerCounter]struct{}
+	releaseOf map[peerCounter]string
 }
 
 func newBook() *book {
 	return &book{
 		byKey:     make(map[string]*entry),
-		byCounter: make(map[uint64]string),
-		cancelled: make(map[uint64]struct{}),
-		releaseOf: make(map[uint64]string),
+		byCounter: make(map[peerCounter]string),
+		cancelled: make(map[peerCounter]struct{}),
+		releaseOf: make(map[peerCounter]string),
 	}
 }
 
@@ -70,10 +81,10 @@ func (b *book) drop(item *entry) {
 		return
 	}
 	if item.pending != nil {
-		delete(b.byCounter, *item.pending)
+		delete(b.byCounter, counterKey(item.peer, *item.pending))
 	}
 	if item.releaseCounter != nil {
-		delete(b.releaseOf, *item.releaseCounter)
+		delete(b.releaseOf, counterKey(item.peer, *item.releaseCounter))
 	}
 	delete(b.byKey, keyOf(item.peer, item.role, item.pair))
 }
@@ -220,7 +231,7 @@ func (s *Instance) flushReleaseLocked(item *entry) {
 	item.releaseSent = true
 	counter := result.Counter
 	item.releaseCounter = &counter
-	s.book.releaseOf[counter] = keyOf(item.peer, item.role, item.pair)
+	s.book.releaseOf[counterKey(item.peer, counter)] = keyOf(item.peer, item.role, item.pair)
 	item.established = false
 	item.wanted = false
 	item.renewCounter = nil
@@ -261,29 +272,31 @@ func (s *Instance) sendSubscribeLocked(item *entry) {
 	item.lastSubscribe = &counter
 	item.lastWasSubscribe = true
 	item.pending = &counter
-	s.book.byCounter[counter] = keyOf(item.peer, item.role, item.pair)
+	s.book.byCounter[counterKey(item.peer, counter)] = keyOf(item.peer, item.role, item.pair)
 }
 
 func (s *Instance) cancelPendingLocked(item *entry) {
 	if item.pending == nil {
 		return
 	}
-	s.book.cancelled[*item.pending] = struct{}{}
-	delete(s.book.byCounter, *item.pending)
+	ref := counterKey(item.peer, *item.pending)
+	s.book.cancelled[ref] = struct{}{}
+	delete(s.book.byCounter, ref)
 	item.pending = nil
 	item.lastWasSubscribe = false
 }
 
 func (s *Instance) noteResultLocked(peer string, counter uint64, accepted bool) {
-	if _, cancelled := s.book.cancelled[counter]; cancelled {
+	ref := counterKey(peer, counter)
+	if _, cancelled := s.book.cancelled[ref]; cancelled {
 		return
 	}
-	if key, ok := s.book.byCounter[counter]; ok {
+	if key, ok := s.book.byCounter[ref]; ok {
 		item := s.book.byKey[key]
 		if item == nil || item.peer != peer {
 			return
 		}
-		delete(s.book.byCounter, counter)
+		delete(s.book.byCounter, ref)
 		item.pending = nil
 		if item.renewCounter != nil && *item.renewCounter == counter {
 			item.renewCounter = nil
@@ -298,9 +311,9 @@ func (s *Instance) noteResultLocked(peer string, counter uint64, accepted bool) 
 		item.established = true
 		return
 	}
-	if key, ok := s.book.releaseOf[counter]; ok {
+	if key, ok := s.book.releaseOf[ref]; ok {
 		item := s.book.byKey[key]
-		delete(s.book.releaseOf, counter)
+		delete(s.book.releaseOf, ref)
 		if item == nil || item.peer != peer {
 			return
 		}

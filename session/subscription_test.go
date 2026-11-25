@@ -623,3 +623,193 @@ func TestConnectionGoneStopsDeleteRetry(t *testing.T) {
 		t.Fatalf("retry after disconnect deletes=%d established=%d", len(peer.deletes), len(instance.Established()))
 	}
 }
+
+// coincidentCounters numbers datagrams per peer. Two remotes both start at 1.
+type coincidentCounters struct {
+	next       map[string]uint64
+	subscribes map[string][]sentSubscribe
+	deletes    map[string][]sentDelete
+}
+
+func newCoincidentCounters() *coincidentCounters {
+	return &coincidentCounters{
+		next:       map[string]uint64{},
+		subscribes: map[string][]sentSubscribe{},
+		deletes:    map[string][]sentDelete{},
+	}
+}
+
+func (c *coincidentCounters) SendSubscribe(peer string, pair Pair) SendResult {
+	counter := c.bump(peer)
+	c.subscribes[peer] = append(c.subscribes[peer], sentSubscribe{pair: pair, counter: counter})
+	return SendResult{Counter: counter, Sent: true}
+}
+
+func (c *coincidentCounters) SendDelete(peer string, del Delete) SendResult {
+	counter := c.bump(peer)
+	c.deletes[peer] = append(c.deletes[peer], sentDelete{del: del, counter: counter})
+	return SendResult{Counter: counter, Sent: true}
+}
+
+func (c *coincidentCounters) SendNotify(string, model.FeatureAddressType, model.FunctionType, any) error {
+	return nil
+}
+
+func (c *coincidentCounters) PeerHeld(string) ([]Pair, bool) {
+	return nil, false
+}
+
+func (c *coincidentCounters) bump(peer string) uint64 {
+	c.next[peer]++
+	return c.next[peer]
+}
+
+func TestCoincidentPeerCountersDoNotCollide(t *testing.T) {
+	pair := measurementPair(11)
+	t.Run("subscribe", func(t *testing.T) {
+		transport := newCoincidentCounters()
+		root := t.TempDir()
+		instance := openAt(t, root, 4741, "counters", transport)
+		trustAndConnect(t, instance, skiRemoteA, skiRemoteB)
+		if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Select(skiRemoteB, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		counter := coincidingSubscribe(t, transport)
+		if err := instance.NoteResult(skiRemoteA, counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.NoteResult(skiRemoteB, counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if establishedCount(instance, skiRemoteA) != 1 || establishedCount(instance, skiRemoteB) != 1 {
+			t.Fatalf("established = %+v", instance.Established())
+		}
+		if err := instance.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened := openAt(t, root, 4741, "counters", transport)
+		t.Cleanup(func() { _ = reopened.Close() })
+		if establishedCount(reopened, skiRemoteA) != 1 || establishedCount(reopened, skiRemoteB) != 1 {
+			t.Fatalf("reopen established = %+v", reopened.Established())
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		transport := newCoincidentCounters()
+		instance := openAt(t, t.TempDir(), 4742, "cancelled", transport)
+		t.Cleanup(func() { _ = instance.Close() })
+		trustAndConnect(t, instance, skiRemoteA, skiRemoteB)
+		if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Select(skiRemoteA, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Select(skiRemoteB, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		counter := coincidingSubscribe(t, transport)
+		if err := instance.NoteResult(skiRemoteB, counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if establishedCount(instance, skiRemoteB) != 1 {
+			t.Fatal("cancelled counter of the first peer swallowed the second peer's result")
+		}
+		if err := instance.NoteResult(skiRemoteA, counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if establishedCount(instance, skiRemoteA) != 0 || establishedCount(instance, skiRemoteB) != 1 {
+			t.Fatalf("late result established = %+v", instance.Established())
+		}
+	})
+
+	t.Run("release", func(t *testing.T) {
+		transport := newCoincidentCounters()
+		instance := openAt(t, t.TempDir(), 4743, "release", transport)
+		t.Cleanup(func() { _ = instance.Close() })
+		trustAndConnect(t, instance, skiRemoteA, skiRemoteB)
+		if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Select(skiRemoteB, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.NoteResult(skiRemoteA, coincidingSubscribe(t, transport), true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.NoteResult(skiRemoteB, transport.subscribes[skiRemoteB][0].counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Release(skiRemoteA, pair); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Release(skiRemoteB, pair); err != nil {
+			t.Fatal(err)
+		}
+		if len(transport.deletes[skiRemoteA]) != 1 || len(transport.deletes[skiRemoteB]) != 1 {
+			t.Fatalf("deletes A=%d B=%d", len(transport.deletes[skiRemoteA]), len(transport.deletes[skiRemoteB]))
+		}
+		shared := transport.deletes[skiRemoteA][0].counter
+		if shared != transport.deletes[skiRemoteB][0].counter {
+			t.Fatalf("delete counters A=%d B=%d", shared, transport.deletes[skiRemoteB][0].counter)
+		}
+		if err := instance.NoteResult(skiRemoteA, shared, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(transport.deletes[skiRemoteA]) != 2 || len(transport.deletes[skiRemoteB]) != 1 {
+			t.Fatalf("after first negative deletes A=%d B=%d", len(transport.deletes[skiRemoteA]), len(transport.deletes[skiRemoteB]))
+		}
+		if err := instance.NoteResult(skiRemoteB, shared, false); err != nil {
+			t.Fatal(err)
+		}
+		if len(transport.deletes[skiRemoteA]) != 2 || len(transport.deletes[skiRemoteB]) != 2 {
+			t.Fatalf("after second negative deletes A=%d B=%d", len(transport.deletes[skiRemoteA]), len(transport.deletes[skiRemoteB]))
+		}
+		if err := instance.NoteResult(skiRemoteA, transport.deletes[skiRemoteA][1].counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.NoteResult(skiRemoteB, transport.deletes[skiRemoteB][1].counter, true); err != nil {
+			t.Fatal(err)
+		}
+		if len(instance.Established()) != 0 {
+			t.Fatalf("accepted deletes left %+v", instance.Established())
+		}
+	})
+}
+
+func trustAndConnect(t *testing.T, instance *Instance, skis ...string) {
+	t.Helper()
+	for _, ski := range skis {
+		if err := instance.Trust(ski, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Connect(ski, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func coincidingSubscribe(t *testing.T, transport *coincidentCounters) uint64 {
+	t.Helper()
+	if len(transport.subscribes[skiRemoteA]) == 0 || len(transport.subscribes[skiRemoteB]) == 0 {
+		t.Fatal("both peers did not subscribe")
+	}
+	counter := transport.subscribes[skiRemoteA][0].counter
+	if counter != transport.subscribes[skiRemoteB][0].counter {
+		t.Fatalf("subscribe counters A=%d B=%d", counter, transport.subscribes[skiRemoteB][0].counter)
+	}
+	return counter
+}
+
+func establishedCount(instance *Instance, peer string) int {
+	count := 0
+	for _, record := range instance.Established() {
+		if record.Peer == peer {
+			count++
+		}
+	}
+	return count
+}
