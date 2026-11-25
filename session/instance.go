@@ -18,7 +18,6 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebus-go/discovery"
 	"github.com/Project-Helianthus/helianthus-eebus-go/service"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
-	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	shiputil "github.com/Project-Helianthus/helianthus-ship-go/util"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -32,15 +31,8 @@ var (
 	errNoSPINE      = errors.New("remote is not ready for SPINE data")
 	errNotPrimary   = errors.New("subscription read is not addressed to the primary node management")
 	errNotListening = errors.New("ship node is not listening")
+	errBrowse       = errors.New("ship discovery did not start")
 )
-
-// hubWithoutMDNS is not a network interface name. The pinned hub starts SHIP
-// mDNS browse and announcement together, and that browse does not return from
-// shutdown while a discovered record is in flight, which would leave the SHIP
-// listener bound. The name is longer than an interface name, so the hub's
-// lookup fails before it starts a provider. announceSHIP publishes this
-// instance's SHIP §7 record on its own.
-const hubWithoutMDNS = "session-no-hub-mdns"
 
 // NotifyHandler receives a notify for one established subscription of this instance.
 type NotifyHandler func(peer string, pair Pair, function model.FunctionType, data any, at time.Time)
@@ -77,7 +69,7 @@ type Instance struct {
 	suspended   bool
 	root        string
 	service     *service.Service
-	announce    *mdns.ZeroconfProvider
+	browse      *shipBrowse
 	ski         string
 	port        int
 	localDevice model.AddressDeviceType
@@ -116,7 +108,6 @@ func Open(cfg Config) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	configuration.SetInterfaces([]string{hubWithoutMDNS})
 	instance := &Instance{
 		root:      cfg.StateRoot,
 		port:      cfg.Port,
@@ -160,38 +151,33 @@ func Open(cfg Config) (*Instance, error) {
 		return nil, err
 	}
 	instance.book.adopt(stored)
+	instance.browse = newShipBrowse(instance.view.Announcement())
+	if err := installHubBrowse(instance.service, instance.browse); err != nil {
+		instance.service.Shutdown()
+		return nil, err
+	}
+	if err := instance.service.SetPairingRegistration(cfg.Register); err != nil {
+		instance.service.Shutdown()
+		return nil, err
+	}
 	if err := spine.Events.Subscribe(instance); err != nil {
 		instance.service.Shutdown()
 		return nil, err
 	}
-	// service.Start opens this instance's SHIP websocket on every interface.
-	// The listener accepts after Start returns. The hub does not browse.
+	// service.Start opens this instance's SHIP websocket, then the browse
+	// installed above announces and reads SHIP §7 records for this instance.
 	instance.service.Start()
-	if err := waitSHIPListener(instance.port); err != nil {
-		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
-		return nil, err
+	err = waitSHIPListener(instance.port)
+	if err == nil {
+		err = instance.browse.Err()
 	}
-	if err := instance.announceSHIP(); err != nil {
+	if err != nil {
 		_ = spine.Events.Unsubscribe(instance)
 		instance.service.Shutdown()
 		return nil, err
 	}
 	instance.listening = true
 	return instance, nil
-}
-
-// announceSHIP publishes this instance's SHIP §7 TXT record. The provider is
-// not asked to browse, so shutting it down does not wait on discovered records.
-func (s *Instance) announceSHIP() error {
-	announcement := s.view.Announcement()
-	provider := mdns.NewZeroconfProvider(nil)
-	if err := provider.Announce(announcement.Name, announcement.Port, announcement.TXT.Records()); err != nil {
-		provider.Shutdown()
-		return err
-	}
-	s.announce = provider
-	return nil
 }
 
 // Close stops this instance. Another instance in the same process is left running.
@@ -206,13 +192,8 @@ func (s *Instance) Close() error {
 	pairs := s.book.durable()
 	root := s.root
 	svc := s.service
-	ann := s.announce
-	s.announce = nil
 	s.mu.Unlock()
 	_ = spine.Events.Unsubscribe(s)
-	if ann != nil {
-		ann.Shutdown()
-	}
 	if svc != nil {
 		svc.Shutdown()
 	}
@@ -866,6 +847,7 @@ func (s *Instance) VisiblePairingCandidateDiscoverySnapshotUpdated(_ api.Service
 			Host: candidate.Host,
 			Port: candidate.Port,
 			TXT: discovery.TXT{
+				TXTVers:  "1",
 				ID:       candidate.Identifier,
 				Path:     candidate.Path,
 				SKI:      candidate.SKI,

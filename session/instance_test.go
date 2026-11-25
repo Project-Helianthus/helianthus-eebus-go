@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/discovery"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
@@ -249,6 +251,106 @@ func shipServiceQuery() []byte {
 	msg[off], msg[off+1] = 0, 12
 	msg[off+2], msg[off+3] = 0x80, 1
 	return msg
+}
+
+func TestInstanceDiscoversRemoteSHIPService(t *testing.T) {
+	const thirdSKI = "cccccccccccccccccccccccccccccccccccccccc"
+	provider := mdns.NewZeroconfProvider(nil)
+	t.Cleanup(provider.Shutdown)
+	third := discovery.TXT{
+		ID:       "id-third",
+		SKI:      thirdSKI,
+		Register: true,
+		Brand:    "helianthus",
+		Type:     "EnergyManagementSystem",
+		Model:    "stack",
+	}
+	if err := provider.Announce("offline-peer", 4773, third.Records()); err != nil {
+		t.Fatal(err)
+	}
+
+	left := openAt(t, t.TempDir(), 4771, "browse-left", nil)
+	right := openAt(t, t.TempDir(), 4772, "browse-right", nil)
+	t.Cleanup(func() { _ = left.Close() })
+	t.Cleanup(func() { _ = right.Close() })
+
+	waitDiscovered(t, left, right.SKI(), discoveredAnnouncement(right, "browse-right", false))
+	waitDiscovered(t, left, thirdSKI, discovery.Announcement{
+		Name: "offline-peer",
+		Port: 4773,
+		TXT:  announcedTXT(third),
+	})
+	waitDiscovered(t, right, left.SKI(), discoveredAnnouncement(left, "browse-left", false))
+	waitDiscovered(t, right, thirdSKI, discovery.Announcement{
+		Name: "offline-peer",
+		Port: 4773,
+		TXT:  announcedTXT(third),
+	})
+	if _, ok := left.Discovery().Remote(left.SKI()); ok {
+		t.Fatal("instance listed its own SHIP service")
+	}
+
+	if err := left.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for shipPortOpen(4771) {
+		if time.Now().After(deadline) {
+			t.Fatal("closed instance is still listening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if shipAnnouncementSeen(left.Discovery().Announcement().Name, left.SKI(), time.Second) {
+		t.Fatal("closed instance is still announced")
+	}
+	if !right.Running() || !shipPortOpen(4772) {
+		t.Fatal("closing one instance stopped the other SHIP listener")
+	}
+	if !shipAnnouncementSeen(right.Discovery().Announcement().Name, right.SKI(), 2*time.Second) {
+		t.Fatal("closing one instance stopped the other SHIP announcement")
+	}
+}
+
+func discoveredAnnouncement(instance *Instance, serial string, register bool) discovery.Announcement {
+	return discovery.Announcement{
+		Name: "helianthus-stack-" + serial,
+		Port: instance.Port(),
+		TXT: discovery.TXT{
+			TXTVers:  "1",
+			ID:       "helianthus-stack-" + serial,
+			Path:     discovery.WebsocketPath,
+			SKI:      instance.SKI(),
+			Register: register,
+			Brand:    "helianthus",
+			Type:     "EnergyManagementSystem",
+			Model:    "stack",
+		},
+	}
+}
+
+func announcedTXT(txt discovery.TXT) discovery.TXT {
+	txt.TXTVers = "1"
+	if txt.Path == "" {
+		txt.Path = discovery.WebsocketPath
+	}
+	return txt
+}
+
+func waitDiscovered(t *testing.T, instance *Instance, ski string, want discovery.Announcement) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last discovery.Remote
+	var ok bool
+	for time.Now().Before(deadline) {
+		last, ok = instance.Discovery().Remote(ski)
+		got := last.Announcement
+		if ok && got.Name == want.Name && got.Host != "" && got.Port == want.Port && got.TXT == want.TXT &&
+			!last.Paired && !last.Trusted && last.Connection == shipapi.ConnectionStateNone {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("remote %s = %+v ok=%t remotes=%+v", ski, last, ok, instance.Discovery().Remotes())
 }
 
 func TestUnpairedDiscoveryKeepsSHIPState(t *testing.T) {
