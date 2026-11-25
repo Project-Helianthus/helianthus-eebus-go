@@ -994,6 +994,69 @@ func TestRestartedCounterDoesNotResolvePreviousDelete(t *testing.T) {
 	}
 }
 
+func TestReleaseAfterUnansweredDeleteOnPreviousConnection(t *testing.T) {
+	peer := &offlinePeer{heldAnswered: true}
+	root := t.TempDir()
+	instance, err := prepareInstance(instanceConfig(t, root, 4746, "release-reconnect", peer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close() })
+	pair := measurementPair(12)
+	if err := instance.Trust(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Connect(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.NoteResult(skiRemoteA, peer.subscribes[0].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Release(skiRemoteA, pair); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.deletes) != 1 {
+		t.Fatalf("first release sent %d deletes", len(peer.deletes))
+	}
+	if err := instance.Connect(skiRemoteA, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Connect(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.deletes) != 1 || len(peer.subscribes) != 2 {
+		t.Fatalf("reselection sent %d total deletes and %d subscribes", len(peer.deletes), len(peer.subscribes))
+	}
+	if err := instance.NoteResult(skiRemoteA, peer.subscribes[1].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Established()) != 1 {
+		t.Fatal("new subscribe did not establish the pair")
+	}
+	if err := instance.Release(skiRemoteA, pair); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.deletes) != 2 || !sameAddress(peer.deletes[1].del.Server, pair.Server) ||
+		!sameAddress(peer.deletes[1].del.Client, pair.Client) {
+		t.Fatalf("second release did not send a new delete for the pair: %+v", peer.deletes)
+	}
+	if err := instance.NoteResult(skiRemoteA, peer.deletes[1].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if records := instance.Established(); len(records) != 0 {
+		t.Fatalf("released pair remained established: %+v", records)
+	}
+	if records, err := loadState(root); err != nil || len(records) != 0 {
+		t.Fatalf("released pair remained durable: %+v, error %v", records, err)
+	}
+}
+
 func TestPendingSubscribeRetriesAfterReconnect(t *testing.T) {
 	peer := &offlinePeer{heldAnswered: true}
 	instance := openAt(t, t.TempDir(), 4782, "pending-retry", peer)

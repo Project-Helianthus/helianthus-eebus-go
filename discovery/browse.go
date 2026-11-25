@@ -123,8 +123,8 @@ func (b *Browser) Stop() {
 
 func (b *Browser) loop(ctx context.Context, done chan struct{}, browse browseFunc) {
 	defer close(done)
-	entries := make(chan *zeroconf.ServiceEntry, 32)
-	removed := make(chan *zeroconf.ServiceEntry, 32)
+	entries := make(chan *zeroconf.ServiceEntry)
+	removed := make(chan *zeroconf.ServiceEntry)
 	browseDone := make(chan error)
 	go func() {
 		browseDone <- browse(ctx, shipServiceType, shipDomain, entries, removed)

@@ -32,6 +32,54 @@ func TestBrowserReportsBrowseFailure(t *testing.T) {
 	}
 }
 
+func TestBrowserConsumesUnbufferedRecordsThroughShutdown(t *testing.T) {
+	const ski = "abababababababababababababababababababab"
+	entry := &zeroconf.ServiceEntry{Port: 4791, HostName: "offline.local."}
+	entry.Instance = "offline-peer"
+	entry.Text = TXT{ID: "id-peer", SKI: ski, Register: true}.Records()
+
+	type browseResult struct{ entries, removed int }
+	result := make(chan browseResult, 1)
+	browse := func(ctx context.Context, _, _ string, entries, removed chan<- *zeroconf.ServiceEntry, _ ...zeroconf.ClientOption) error {
+		result <- browseResult{cap(entries), cap(removed)}
+		entries <- entry
+		<-ctx.Done()
+		removed <- entry
+		return ctx.Err()
+	}
+	seen := make(chan []Announcement, 1)
+	browser := NewBrowser("")
+	if err := browser.start(func(found []Announcement) { seen <- found }, browse); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case found := <-seen:
+		if len(found) != 1 || found[0].TXT.SKI != ski {
+			t.Fatalf("observed records = %+v", found)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("record was not delivered")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		browser.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain the final removal")
+	}
+	if got := <-result; got != (browseResult{}) {
+		t.Fatalf("record channels are buffered: entries=%d removed=%d", got.entries, got.removed)
+	}
+	browser.mu.Lock()
+	defer browser.mu.Unlock()
+	if len(browser.found) != 0 {
+		t.Fatal("final removal was not applied")
+	}
+}
+
 func TestBrowserStopReturnsWhilePeerRecordIsInFlight(t *testing.T) {
 	const ski = "abababababababababababababababababababab"
 	registration, err := Register(Announcement{

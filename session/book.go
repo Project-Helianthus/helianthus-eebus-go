@@ -409,6 +409,7 @@ func (s *Instance) forgetConnectionCountersLocked(peer string) {
 		item.lastSubscribe = nil
 		item.lastWasSubscribe = false
 		item.releaseCounter = nil
+		item.releaseSent = false
 		item.renewCounter = nil
 	}
 }
