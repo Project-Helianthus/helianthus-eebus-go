@@ -34,6 +34,13 @@ var (
 	errNodeManagement = errors.New("node management feature is missing")
 )
 
+// pinnedMDNSUnstarted is not a network interface. The hub resolves it when mDNS
+// starts, fails, and leaves its Zeroconf browse unstarted. That browse's
+// Shutdown waits on a send its listener no longer receives once shutdown
+// cancels the browse, so Close would not return while a peer record is in
+// flight. This instance registers and browses the SHIP §7 service itself.
+const pinnedMDNSUnstarted = "session-ship-mdns-unstarted"
+
 // NotifyHandler receives a notify for one established subscription of this instance.
 type NotifyHandler func(peer string, pair Pair, function model.FunctionType, data any, at time.Time)
 
@@ -83,6 +90,8 @@ type Instance struct {
 	peerHeldReady map[string]bool
 	peerHeldAsked map[string]bool
 	heldCounter   map[string]uint64
+	browser       *discovery.Browser
+	registration  *discovery.Registration
 }
 
 var _ api.ServiceReaderInterface = (*Instance)(nil)
@@ -111,6 +120,7 @@ func Open(cfg Config) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	configuration.SetInterfaces([]string{pinnedMDNSUnstarted})
 	instance := &Instance{
 		root:          cfg.StateRoot,
 		port:          cfg.Port,
@@ -176,8 +186,8 @@ func Open(cfg Config) (*Instance, error) {
 		instance.service.Shutdown()
 		return nil, err
 	}
-	// service.Start opens this instance's SHIP websocket. The hub's own
-	// mDNS announces and browses the SHIP §7 record for this instance.
+	// service.Start opens this instance's SHIP websocket. The hub mDNS browse
+	// stays unstarted; this instance registers and browses the SHIP §7 record.
 	instance.service.Start()
 	err = waitSHIPListener(instance.port)
 	if err != nil {
@@ -185,6 +195,22 @@ func Open(cfg Config) (*Instance, error) {
 		instance.service.Shutdown()
 		return nil, err
 	}
+	instance.browser = discovery.NewBrowser(instance.ski)
+	if err := instance.browser.Start(instance.noteAnnouncements); err != nil {
+		instance.browser = nil
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	registration, err := discovery.Register(instance.view.Announcement())
+	if err != nil {
+		instance.browser.Stop()
+		instance.browser = nil
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	instance.registration = registration
 	instance.listening = true
 	return instance, nil
 }
@@ -201,8 +227,20 @@ func (s *Instance) Close() error {
 	pairs := s.book.durable()
 	root := s.root
 	svc := s.service
+	browser := s.browser
+	registration := s.registration
+	s.browser = nil
+	s.registration = nil
 	s.mu.Unlock()
 	_ = spine.Events.Unsubscribe(s)
+	// Stop the browse while peer records are still in flight, then withdraw
+	// this instance's announcement, then close the SHIP listener.
+	if browser != nil {
+		browser.Stop()
+	}
+	if registration != nil {
+		registration.Close()
+	}
 	if svc != nil {
 		svc.Shutdown()
 	}
@@ -807,6 +845,17 @@ func (s *Instance) RemoteSKIConnected(_ api.ServiceInterface, ski string) {
 // RemoteSKIDisconnected retains feature pairs across a temporary SHIP disconnect.
 func (s *Instance) RemoteSKIDisconnected(_ api.ServiceInterface, ski string) {
 	_ = s.Connect(ski, false)
+}
+
+func (s *Instance) noteAnnouncements(found []discovery.Announcement) {
+	s.mu.Lock()
+	view := s.view
+	closed := s.closed
+	s.mu.Unlock()
+	if closed || view == nil {
+		return
+	}
+	view.ReplaceAnnouncements(found)
 }
 
 // VisibleRemoteServicesUpdated records discovered SKIs that have no snapshot yet.

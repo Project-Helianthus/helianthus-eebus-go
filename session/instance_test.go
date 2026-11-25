@@ -353,6 +353,59 @@ func waitDiscovered(t *testing.T, instance *Instance, ski string, want discovery
 	t.Fatalf("remote %s = %+v ok=%t remotes=%+v", ski, last, ok, instance.Discovery().Remotes())
 }
 
+func TestCloseReturnsWhilePeerRecordsAreInFlight(t *testing.T) {
+	const thirdSKI = "cccccccccccccccccccccccccccccccccccccccc"
+	provider := mdns.NewZeroconfProvider(nil)
+	t.Cleanup(func() { provider.Shutdown() })
+	third := discovery.TXT{
+		ID:       "id-third",
+		SKI:      thirdSKI,
+		Register: true,
+		Brand:    "helianthus",
+		Type:     "EnergyManagementSystem",
+		Model:    "stack",
+	}
+	if err := provider.Announce("offline-peer", 4783, third.Records()); err != nil {
+		t.Fatal(err)
+	}
+	left := openAt(t, t.TempDir(), 4781, "close-left", nil)
+	right := openAt(t, t.TempDir(), 4782, "close-right", nil)
+	t.Cleanup(func() { _ = right.Close() })
+
+	waitDiscovered(t, left, right.SKI(), discoveredAnnouncement(right, "close-right", false))
+	waitDiscovered(t, right, left.SKI(), discoveredAnnouncement(left, "close-left", false))
+	waitDiscovered(t, left, thirdSKI, discovery.Announcement{
+		Name: "offline-peer",
+		Port: 4783,
+		TXT:  announcedTXT(third),
+	})
+
+	finished := make(chan error, 1)
+	go func() {
+		finished <- left.Close()
+	}()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return while a peer SHIP record was in flight")
+	}
+	if left.Running() || shipPortOpen(4781) {
+		t.Fatal("closed instance is still listening")
+	}
+	if shipAnnouncementSeen(left.Discovery().Announcement().Name, left.SKI(), time.Second) {
+		t.Fatal("closed instance is still announced")
+	}
+	if !right.Running() || !shipPortOpen(4782) {
+		t.Fatal("closing one instance stopped the other SHIP listener")
+	}
+	if !shipAnnouncementSeen(right.Discovery().Announcement().Name, right.SKI(), 2*time.Second) {
+		t.Fatal("closing one instance stopped the other SHIP announcement")
+	}
+}
+
 func TestUnpairedDiscoveryKeepsSHIPState(t *testing.T) {
 	instance := openAt(t, t.TempDir(), 4723, "view", nil)
 	t.Cleanup(func() { _ = instance.Close() })
