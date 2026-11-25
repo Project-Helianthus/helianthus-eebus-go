@@ -26,12 +26,12 @@ import (
 )
 
 var (
-	errClosed       = errors.New("instance is closed")
-	errState        = errors.New("instance state root is missing")
-	errNoSPINE      = errors.New("remote is not ready for SPINE data")
-	errNotPrimary   = errors.New("subscription read is not addressed to the primary node management")
-	errNotListening = errors.New("ship node is not listening")
-	errBrowse       = errors.New("ship discovery did not start")
+	errClosed         = errors.New("instance is closed")
+	errState          = errors.New("instance state root is missing")
+	errNoSPINE        = errors.New("remote is not ready for SPINE data")
+	errNotPrimary     = errors.New("subscription read is not addressed to the primary node management")
+	errNotListening   = errors.New("ship node is not listening")
+	errNodeManagement = errors.New("node management feature is missing")
 )
 
 // NotifyHandler receives a notify for one established subscription of this instance.
@@ -63,23 +63,26 @@ type notified struct {
 // Instance is one eeBUS instance. Nothing in this package stores instance
 // state in a package-level variable.
 type Instance struct {
-	mu          sync.Mutex
-	closed      bool
-	listening   bool
-	suspended   bool
-	root        string
-	service     *service.Service
-	browse      *shipBrowse
-	ski         string
-	port        int
-	localDevice model.AddressDeviceType
-	view        *discovery.Node
-	transport   Transport
-	trusted     map[string]bool
-	connected   map[string]bool
-	book        *book
-	cache       map[string]notified
-	handler     NotifyHandler
+	mu            sync.Mutex
+	closed        bool
+	listening     bool
+	suspended     bool
+	root          string
+	service       *service.Service
+	ski           string
+	port          int
+	localDevice   model.AddressDeviceType
+	view          *discovery.Node
+	transport     Transport
+	trusted       map[string]bool
+	connected     map[string]bool
+	book          *book
+	cache         map[string]notified
+	handler       NotifyHandler
+	peerHeld      map[string][]Pair
+	peerHeldReady map[string]bool
+	peerHeldAsked map[string]bool
+	heldCounter   map[string]uint64
 }
 
 var _ api.ServiceReaderInterface = (*Instance)(nil)
@@ -109,13 +112,17 @@ func Open(cfg Config) (*Instance, error) {
 		return nil, err
 	}
 	instance := &Instance{
-		root:      cfg.StateRoot,
-		port:      cfg.Port,
-		transport: cfg.Transport,
-		trusted:   make(map[string]bool),
-		connected: make(map[string]bool),
-		book:      newBook(),
-		cache:     make(map[string]notified),
+		root:          cfg.StateRoot,
+		port:          cfg.Port,
+		transport:     cfg.Transport,
+		trusted:       make(map[string]bool),
+		connected:     make(map[string]bool),
+		book:          newBook(),
+		cache:         make(map[string]notified),
+		peerHeld:      make(map[string][]Pair),
+		peerHeldReady: make(map[string]bool),
+		peerHeldAsked: make(map[string]bool),
+		heldCounter:   make(map[string]uint64),
 	}
 	instance.service = service.NewService(configuration, instance)
 	if err := instance.service.Setup(); err != nil {
@@ -151,10 +158,15 @@ func Open(cfg Config) (*Instance, error) {
 		return nil, err
 	}
 	instance.book.adopt(stored)
-	instance.browse = newShipBrowse(instance.view.Announcement())
-	if err := installHubBrowse(instance.service, instance.browse); err != nil {
+	// The pinned node management answers a subscription-data call from its
+	// in-memory remote-client list. ProcessCmd looks the feature up on the
+	// entity, so this instance answers from the retained pairs instead.
+	if err := instance.installRetainedRead(); err != nil {
 		instance.service.Shutdown()
 		return nil, err
+	}
+	if local := instance.service.LocalDevice(); local != nil && local.NodeManagement() != nil {
+		local.NodeManagement().AddResultCallback(instance.onSpineResult)
 	}
 	if err := instance.service.SetPairingRegistration(cfg.Register); err != nil {
 		instance.service.Shutdown()
@@ -164,13 +176,10 @@ func Open(cfg Config) (*Instance, error) {
 		instance.service.Shutdown()
 		return nil, err
 	}
-	// service.Start opens this instance's SHIP websocket, then the browse
-	// installed above announces and reads SHIP §7 records for this instance.
+	// service.Start opens this instance's SHIP websocket. The hub's own
+	// mDNS announces and browses the SHIP §7 record for this instance.
 	instance.service.Start()
 	err = waitSHIPListener(instance.port)
-	if err == nil {
-		err = instance.browse.Err()
-	}
 	if err != nil {
 		_ = spine.Events.Unsubscribe(instance)
 		instance.service.Shutdown()
@@ -363,6 +372,12 @@ func (s *Instance) Connect(ski string, up bool) error {
 		s.reconcileLocked(ski)
 	} else {
 		s.dropUnsentReleasesLocked(ski)
+		// The subscribe left the host and the connection is gone, so its
+		// result will not arrive. Cancel that counter and leave the
+		// selection wanted: the next discovery sends it again, and a late
+		// result for the cancelled counter does not establish the pair.
+		s.abandonPendingLocked(ski)
+		s.forgetPeerHeldLocked(ski)
 	}
 	return s.saveLocked()
 }
@@ -587,8 +602,13 @@ func (s *Instance) Publish(server model.FeatureAddressType, function model.Funct
 
 // HandleEvent delivers a SPINE data notify to this instance when the remote
 // belongs to it. The pinned spine-go event bus is process-wide; filtering keeps
-// each instance's handler separate.
+// each instance's handler separate. A subscription change is the pinned
+// manager's record of a remote subscribe or delete.
 func (s *Instance) HandleEvent(payload spineapi.EventPayload) {
+	if payload.EventType == spineapi.EventTypeSubscriptionChange {
+		s.noteSubscriptionEvent(payload)
+		return
+	}
 	if payload.EventType != spineapi.EventTypeDataChange || payload.Ski == "" {
 		return
 	}

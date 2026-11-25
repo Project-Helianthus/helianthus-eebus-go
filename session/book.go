@@ -350,13 +350,20 @@ func (s *Instance) reconcileLocked(peer string) {
 		return
 	}
 	s.flushLocked(peer)
-	if s.transport == nil {
-		return
+	var held []Pair
+	var answered bool
+	if s.transport != nil {
+		held, answered = s.transport.PeerHeld(peer)
+	} else {
+		held, answered = s.peerHeldLocked(peer)
 	}
-	held, answered := s.transport.PeerHeld(peer)
 	if !answered {
 		return
 	}
+	s.renewLostLocked(peer, held)
+}
+
+func (s *Instance) renewLostLocked(peer string, held []Pair) {
 	for _, item := range s.entriesOf(peer, RoleLocalClient) {
 		if !item.established || !item.wanted || item.pending != nil || item.renewCounter != nil {
 			continue
@@ -370,6 +377,16 @@ func (s *Instance) reconcileLocked(peer string) {
 			counter := *item.pending
 			item.renewCounter = &counter
 		}
+	}
+}
+
+func (s *Instance) abandonPendingLocked(peer string) {
+	for _, item := range s.entriesOf(peer, RoleLocalClient) {
+		if item.pending == nil {
+			continue
+		}
+		s.cancelPendingLocked(item)
+		item.renewCounter = nil
 	}
 }
 
@@ -398,7 +415,7 @@ func (s *Instance) acceptServerLocked(peer string, pair Pair) bool {
 	return true
 }
 
-func (s *Instance) applyDeleteLocked(peer string, del Delete) {
+func (s *Instance) applyDeleteLocked(peer string, del Delete) int {
 	del = fillDelete(del, peerDevice(s, peer), s.localDevice)
 	var matched []*entry
 	for _, item := range s.book.byKey {
@@ -417,6 +434,7 @@ func (s *Instance) applyDeleteLocked(peer string, del Delete) {
 		item.releaseQueued = false
 		s.book.drop(item)
 	}
+	return len(matched)
 }
 
 func (s *Instance) subscriptionDataLocked(peer string) []model.SubscriptionManagementEntryDataType {

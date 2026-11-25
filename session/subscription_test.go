@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
@@ -912,4 +913,317 @@ func establishedCount(instance *Instance, peer string) int {
 		}
 	}
 	return count
+}
+
+func TestPendingSubscribeRetriesAfterReconnect(t *testing.T) {
+	peer := &offlinePeer{heldAnswered: true}
+	instance := openAt(t, t.TempDir(), 4782, "pending-retry", peer)
+	t.Cleanup(func() { _ = instance.Close() })
+	pair := measurementPair(11)
+	if err := instance.Trust(skiRemoteA, true); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.subscribes) != 1 || len(instance.Established()) != 0 {
+		t.Fatalf("subscribes=%d established=%d", len(peer.subscribes), len(instance.Established()))
+	}
+	original := peer.subscribes[0].counter
+	if err := instance.Connect(skiRemoteA, false); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.subscribes) != 2 {
+		t.Fatalf("pending subscribe never retried after reconnect: %d", len(peer.subscribes))
+	}
+	if err := instance.NoteResult(skiRemoteA, original, true); err != nil || instance.NoteResult(skiRemoteA, original, true) != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Established()) != 0 {
+		t.Fatal("late result established the pair")
+	}
+	if err := instance.NoteResult(skiRemoteA, peer.subscribes[1].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Established()) != 1 {
+		t.Fatalf("retry was not established: %+v", instance.Established())
+	}
+}
+
+func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
+	writer := &captureWriter{}
+	instance := openAt(t, t.TempDir(), 4781, "default-path", nil)
+	t.Cleanup(func() { _ = instance.Close() })
+	local := instance.LocalDevice()
+	entity := local.Entity([]model.AddressEntityType{1})
+	if entity == nil {
+		t.Fatal("local entity is missing")
+	}
+	measurement := entity.GetOrAddFeature(model.FeatureTypeTypeMeasurement, model.RoleTypeClient)
+	loadControl := entity.GetOrAddFeature(model.FeatureTypeTypeLoadControl, model.RoleTypeClient)
+	if measurement.Address() == nil || loadControl.Address() == nil {
+		t.Fatal("local client feature has no address")
+	}
+	if err := instance.AttachRemote(skiRemoteA, writer); err != nil {
+		t.Fatal(err)
+	}
+	remoteDevice := model.AddressDeviceType("d:_n:test_remote-a")
+	remote := local.RemoteDeviceForSki(skiRemoteA)
+	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+		DeviceAddress: &model.DeviceAddressType{Device: &remoteDevice},
+	})
+	measurementPair := Pair{
+		Client:            *measurement.Address(),
+		Server:            featureAddress(string(remoteDevice), 1, 11),
+		ServerFeatureType: model.FeatureTypeTypeMeasurement,
+	}
+	loadPair := Pair{
+		Client:            *loadControl.Address(),
+		Server:            featureAddress(string(remoteDevice), 1, 12),
+		ServerFeatureType: model.FeatureTypeTypeLoadControl,
+	}
+	if err := instance.Trust(skiRemoteA, true); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{measurementPair, loadPair}); err != nil {
+		t.Fatal(err)
+	}
+	subscribes := subscriptionRequests(writer.snapshot())
+	measurementCounter, ok := subscribeCounter(subscribes, measurementPair)
+	if !ok || len(subscribes) != 2 {
+		t.Fatalf("subscribes=%d measurement=%t", len(subscribes), ok)
+	}
+	source := spine.NodeManagementAddress(&remoteDevice)
+	destination := instance.PrimaryNodeManagement()
+	feedSpine(t, remote, model.HeaderType{
+		AddressSource:       source,
+		AddressDestination:  &destination,
+		MsgCounter:          counterPtr(9001),
+		MsgCounterReference: counterPtr(measurementCounter),
+		CmdClassifier:       classifierPtr(model.CmdClassifierTypeResult),
+	}, model.CmdType{ResultData: &model.ResultDataType{ErrorNumber: errorNumberPtr(model.ErrorNumberTypeNoError)}})
+	waitForPair(t, instance, skiRemoteA, measurementPair)
+	if establishedCount(instance, skiRemoteA) != 1 {
+		t.Fatalf("pending pair was established: %+v", instance.Established())
+	}
+
+	localDevice := local.Address()
+	serverPair := Pair{
+		Client:            featureAddress(string(remoteDevice), 1, 21),
+		Server:            featureAddress(string(*localDevice), 1, 2),
+		ServerFeatureType: model.FeatureTypeTypeMeasurement,
+	}
+	instance.HandleEvent(spineapi.EventPayload{
+		Ski:        skiRemoteA,
+		EventType:  spineapi.EventTypeSubscriptionChange,
+		ChangeType: spineapi.ElementChangeAdd,
+		Data: model.SubscriptionManagementRequestCallType{
+			ClientAddress:     &serverPair.Client,
+			ServerAddress:     &serverPair.Server,
+			ServerFeatureType: &serverPair.ServerFeatureType,
+		},
+	})
+	waitForPair(t, instance, skiRemoteA, serverPair)
+	if err := instance.Trust(skiRemoteB, true); err != nil || instance.Connect(skiRemoteB, true) != nil {
+		t.Fatal(err)
+	}
+	other := Pair{
+		Client:            featureAddress("d:_n:test_remote-b", 1, 21),
+		Server:            featureAddress(string(*localDevice), 1, 3),
+		ServerFeatureType: model.FeatureTypeTypeMeasurement,
+	}
+	if err := instance.AcceptRemoteSubscribe(skiRemoteB, other); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeReply := len(writer.snapshot())
+	feedSpine(t, remote, model.HeaderType{
+		AddressSource:      source,
+		AddressDestination: &destination,
+		MsgCounter:         counterPtr(9002),
+		CmdClassifier:      classifierPtr(model.CmdClassifierTypeCall),
+	}, model.CmdType{NodeManagementSubscriptionData: &model.NodeManagementSubscriptionDataType{}})
+	replies := subscriptionReplies(writer.snapshot()[beforeReply:])
+	if len(replies) != 1 {
+		t.Fatalf("subscription replies=%d", len(replies))
+	}
+	entries := replies[0].SubscriptionEntry
+	if len(entries) != 2 || !entryHas(entries, measurementPair) || !entryHas(entries, serverPair) || entryHas(entries, loadPair) || entryHas(entries, other) {
+		t.Fatalf("subscription data = %+v", entries)
+	}
+
+	readCounter, ok := subscriptionReadCounter(writer.snapshot())
+	if !ok {
+		t.Fatal("subscription data was not read from the peer")
+	}
+	beforeRenew := subscriptionRequests(writer.snapshot())
+	feedSpine(t, remote, model.HeaderType{
+		AddressSource:       source,
+		AddressDestination:  &destination,
+		MsgCounter:          counterPtr(9003),
+		MsgCounterReference: counterPtr(readCounter),
+		CmdClassifier:       classifierPtr(model.CmdClassifierTypeReply),
+	}, model.CmdType{NodeManagementSubscriptionData: &model.NodeManagementSubscriptionDataType{}})
+	renewed := subscriptionRequests(writer.snapshot())
+	if len(renewed) != len(beforeRenew)+1 {
+		t.Fatalf("lost pair renewals=%d", len(renewed)-len(beforeRenew))
+	}
+	if renewed[len(renewed)-1].server != measurementPair.Server.String() {
+		t.Fatalf("renewed %s", renewed[len(renewed)-1].server)
+	}
+
+	feedSpine(t, remote, model.HeaderType{
+		AddressSource:      source,
+		AddressDestination: &destination,
+		MsgCounter:         counterPtr(9004),
+		CmdClassifier:      classifierPtr(model.CmdClassifierTypeCall),
+	}, model.CmdType{NodeManagementSubscriptionDeleteCall: &model.NodeManagementSubscriptionDeleteCallType{
+		SubscriptionDelete: &model.SubscriptionManagementDeleteCallType{
+			ClientAddress: &measurementPair.Client,
+			ServerAddress: &measurementPair.Server,
+		},
+	}})
+	if pairEstablished(instance, skiRemoteA, measurementPair) || !pairEstablished(instance, skiRemoteA, serverPair) || !pairEstablished(instance, skiRemoteB, other) {
+		t.Fatalf("after delete %+v", instance.Established())
+	}
+}
+
+func waitForPair(t *testing.T, instance *Instance, peer string, pair Pair) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if pairEstablished(instance, peer, pair) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pair %s was not established: %+v", pair.Server.String(), instance.Established())
+}
+
+func pairEstablished(instance *Instance, peer string, pair Pair) bool {
+	for _, record := range instance.Established() {
+		if record.Peer == peer && sameAddress(record.Pair.Client, pair.Client) && sameAddress(record.Pair.Server, pair.Server) {
+			return true
+		}
+	}
+	return false
+}
+
+func feedSpine(t *testing.T, remote spineapi.DeviceRemoteInterface, header model.HeaderType, cmd model.CmdType) {
+	t.Helper()
+	buf, err := json.Marshal(model.Datagram{Datagram: model.DatagramType{
+		Header:  header,
+		Payload: model.PayloadType{Cmd: []model.CmdType{cmd}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.HandleSpineMesssage(buf); err != nil {
+		t.Fatalf("spine: %v", err)
+	}
+}
+
+type sentSubscription struct {
+	counter uint64
+	server  string
+}
+
+func subscriptionRequests(messages [][]byte) []sentSubscription {
+	return subscriptionCalls(messages, func(cmd model.CmdType) *model.FeatureAddressType {
+		call := cmd.NodeManagementSubscriptionRequestCall
+		if call == nil || call.SubscriptionRequest == nil {
+			return nil
+		}
+		return call.SubscriptionRequest.ServerAddress
+	})
+}
+
+func subscriptionReadCounter(messages [][]byte) (uint64, bool) {
+	for _, message := range messages {
+		var datagram model.Datagram
+		if json.Unmarshal(message, &datagram) != nil || datagram.Datagram.Header.CmdClassifier == nil || datagram.Datagram.Header.MsgCounter == nil {
+			continue
+		}
+		if *datagram.Datagram.Header.CmdClassifier != model.CmdClassifierTypeCall || len(datagram.Datagram.Payload.Cmd) == 0 {
+			continue
+		}
+		if datagram.Datagram.Payload.Cmd[0].NodeManagementSubscriptionData == nil {
+			continue
+		}
+		return uint64(*datagram.Datagram.Header.MsgCounter), true
+	}
+	return 0, false
+}
+
+func subscriptionReplies(messages [][]byte) []*model.NodeManagementSubscriptionDataType {
+	out := make([]*model.NodeManagementSubscriptionDataType, 0)
+	for _, message := range messages {
+		var datagram model.Datagram
+		if json.Unmarshal(message, &datagram) != nil || datagram.Datagram.Header.CmdClassifier == nil {
+			continue
+		}
+		if *datagram.Datagram.Header.CmdClassifier != model.CmdClassifierTypeReply || len(datagram.Datagram.Payload.Cmd) == 0 {
+			continue
+		}
+		data := datagram.Datagram.Payload.Cmd[0].NodeManagementSubscriptionData
+		if data == nil {
+			continue
+		}
+		out = append(out, data)
+	}
+	return out
+}
+
+func subscriptionCalls(messages [][]byte, server func(model.CmdType) *model.FeatureAddressType) []sentSubscription {
+	out := make([]sentSubscription, 0)
+	for _, message := range messages {
+		var datagram model.Datagram
+		if json.Unmarshal(message, &datagram) != nil || datagram.Datagram.Header.MsgCounter == nil {
+			continue
+		}
+		if len(datagram.Datagram.Payload.Cmd) == 0 {
+			continue
+		}
+		address := server(datagram.Datagram.Payload.Cmd[0])
+		if address == nil {
+			continue
+		}
+		out = append(out, sentSubscription{counter: uint64(*datagram.Datagram.Header.MsgCounter), server: address.String()})
+	}
+	return out
+}
+
+func subscribeCounter(requests []sentSubscription, pair Pair) (uint64, bool) {
+	for _, request := range requests {
+		if request.server == pair.Server.String() {
+			return request.counter, true
+		}
+	}
+	return 0, false
+}
+
+func entryHas(entries []model.SubscriptionManagementEntryDataType, pair Pair) bool {
+	for _, entry := range entries {
+		if entry.ClientAddress != nil && entry.ServerAddress != nil &&
+			entry.ClientAddress.String() == pair.Client.String() && entry.ServerAddress.String() == pair.Server.String() {
+			return true
+		}
+	}
+	return false
+}
+
+func counterPtr(value uint64) *model.MsgCounterType {
+	counter := model.MsgCounterType(value)
+	return &counter
+}
+
+func classifierPtr(value model.CmdClassifierType) *model.CmdClassifierType {
+	return &value
+}
+
+func errorNumberPtr(value model.ErrorNumberType) *model.ErrorNumberType {
+	return &value
 }
