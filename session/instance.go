@@ -102,6 +102,43 @@ var _ spineapi.EventHandlerInterface = (*Instance)(nil)
 // starts that node's SHIP listener and mDNS announcement, and loads feature
 // pairs retained in the state root.
 func Open(cfg Config) (*Instance, error) {
+	instance, err := prepareInstance(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := spine.Events.Subscribe(instance); err != nil {
+		instance.service.Shutdown()
+		return nil, err
+	}
+	// service.Start opens this instance's SHIP websocket. The hub mDNS browse
+	// stays unstarted; this instance registers and browses the SHIP §7 record.
+	instance.service.Start()
+	if err := waitSHIPListener(instance.port); err != nil {
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	instance.browser = discovery.NewBrowser(instance.ski)
+	if err := instance.browser.Start(instance.noteAnnouncements); err != nil {
+		instance.browser = nil
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	registration, err := discovery.Register(instance.view.Announcement())
+	if err != nil {
+		instance.browser.Stop()
+		instance.browser = nil
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	instance.registration = registration
+	instance.listening = true
+	return instance, nil
+}
+
+func prepareInstance(cfg Config) (*Instance, error) {
 	info, err := os.Stat(cfg.StateRoot)
 	if err != nil || !info.IsDir() {
 		return nil, errState
@@ -182,36 +219,6 @@ func Open(cfg Config) (*Instance, error) {
 		instance.service.Shutdown()
 		return nil, err
 	}
-	if err := spine.Events.Subscribe(instance); err != nil {
-		instance.service.Shutdown()
-		return nil, err
-	}
-	// service.Start opens this instance's SHIP websocket. The hub mDNS browse
-	// stays unstarted; this instance registers and browses the SHIP §7 record.
-	instance.service.Start()
-	err = waitSHIPListener(instance.port)
-	if err != nil {
-		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
-		return nil, err
-	}
-	instance.browser = discovery.NewBrowser(instance.ski)
-	if err := instance.browser.Start(instance.noteAnnouncements); err != nil {
-		instance.browser = nil
-		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
-		return nil, err
-	}
-	registration, err := discovery.Register(instance.view.Announcement())
-	if err != nil {
-		instance.browser.Stop()
-		instance.browser = nil
-		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
-		return nil, err
-	}
-	instance.registration = registration
-	instance.listening = true
 	return instance, nil
 }
 
@@ -525,12 +532,10 @@ func (s *Instance) AcceptRemoteSubscribe(ski string, pair Pair) error {
 	ski = shiputil.NormalizeSKI(ski)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errClosed
+	if err := s.checkRemoteSubscribeLocked(ski); err != nil {
+		return err
 	}
-	if !s.acceptServerLocked(ski, pair) {
-		return errNoSPINE
-	}
+	s.acceptServerLocked(ski, pair)
 	return s.saveLocked()
 }
 
@@ -886,12 +891,12 @@ func isPrimary(local model.AddressDeviceType, destination model.FeatureAddressTy
 
 // RemoteSKIConnected records a SHIP connection for this instance.
 func (s *Instance) RemoteSKIConnected(_ api.ServiceInterface, ski string) {
-	_ = s.Connect(ski, true)
+	reportAsyncError("record SHIP connect", s.Connect(ski, true))
 }
 
 // RemoteSKIDisconnected retains feature pairs across a temporary SHIP disconnect.
 func (s *Instance) RemoteSKIDisconnected(_ api.ServiceInterface, ski string) {
-	_ = s.Connect(ski, false)
+	reportAsyncError("record SHIP disconnect", s.Connect(ski, false))
 }
 
 func (s *Instance) noteAnnouncements(found []discovery.Announcement) {

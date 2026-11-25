@@ -1,9 +1,36 @@
 package discovery
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/enbility/zeroconf/v2"
 )
+
+func TestBrowserReportsBrowseFailure(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	failure := errors.New("browse socket unavailable")
+	failBrowse := func(context.Context, string, string, chan<- *zeroconf.ServiceEntry, chan<- *zeroconf.ServiceEntry, ...zeroconf.ClientOption) error {
+		return failure
+	}
+	browser := NewBrowser("")
+	if err := browser.start(nil, failBrowse); err != nil {
+		t.Fatal(err)
+	}
+	browser.Stop()
+	if got := logs.String(); !strings.Contains(got, "mDNS browse failed") || !strings.Contains(got, failure.Error()) {
+		t.Fatalf("browse failure not reported: %q", got)
+	}
+}
 
 func TestBrowserStopReturnsWhilePeerRecordIsInFlight(t *testing.T) {
 	const ski = "abababababababababababababababababababab"

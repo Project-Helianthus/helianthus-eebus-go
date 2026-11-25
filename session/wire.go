@@ -1,6 +1,8 @@
 package session
 
 import (
+	"log/slog"
+
 	shiputil "github.com/Project-Helianthus/helianthus-ship-go/util"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -103,8 +105,23 @@ func (f *retainedRead) remove(message *spineapi.Message) *model.ErrorType {
 }
 
 func (f *retainedRead) request(message *spineapi.Message) *model.ErrorType {
-	pinned := f.FeatureLocalInterface.HandleMessage(message)
-	if pinned != nil || message.DeviceRemote == nil {
+	if message.DeviceRemote == nil {
+		return f.FeatureLocalInterface.HandleMessage(message)
+	}
+	s := f.instance
+	peer := shiputil.NormalizeSKI(message.DeviceRemote.Ski())
+	var persistErr error
+	s.mu.Lock()
+	defer func() {
+		s.mu.Unlock()
+		reportAsyncError("persist SPINE subscription request", persistErr)
+	}()
+	// Use the same readiness check as AcceptRemoteSubscribe before the pinned
+	// manager adds a live subscription. Keep acceptance and recording together.
+	if err := s.checkRemoteSubscribeLocked(peer); err != nil {
+		return model.NewErrorType(model.ErrorNumberTypeGeneralError, err.Error())
+	}
+	if pinned := f.FeatureLocalInterface.HandleMessage(message); pinned != nil {
 		return pinned
 	}
 	call := message.Cmd.NodeManagementSubscriptionRequestCall
@@ -119,7 +136,10 @@ func (f *retainedRead) request(message *spineapi.Message) *model.ErrorType {
 	if req.ServerFeatureType != nil {
 		pair.ServerFeatureType = *req.ServerFeatureType
 	}
-	_ = f.instance.AcceptRemoteSubscribe(message.DeviceRemote.Ski(), pair)
+	s.acceptServerLocked(peer, pair)
+	// A storage failure does not undo the manager's live acceptance. Keep
+	// the pair in memory and report the failed persistence separately.
+	persistErr = s.saveLocked()
 	return nil
 }
 
@@ -137,11 +157,17 @@ func (s *Instance) removeRemoteDelete(ski string, del Delete) bool {
 	return true
 }
 
+func reportAsyncError(operation string, err error) {
+	if err != nil {
+		slog.Error(operation, "error", err)
+	}
+}
+
 func (s *Instance) onSpineResult(msg spineapi.ResponseMessage) {
 	if msg.DeviceRemote == nil {
 		return
 	}
-	_ = s.NoteResult(msg.DeviceRemote.Ski(), uint64(msg.MsgCounterReference), resultAccepted(msg.Data))
+	reportAsyncError("record SPINE subscription result", s.NoteResult(msg.DeviceRemote.Ski(), uint64(msg.MsgCounterReference), resultAccepted(msg.Data)))
 }
 
 func resultAccepted(data any) bool {
@@ -169,7 +195,7 @@ func (s *Instance) noteSubscriptionEvent(payload spineapi.EventPayload) {
 		if req.ServerFeatureType != nil {
 			pair.ServerFeatureType = *req.ServerFeatureType
 		}
-		_ = s.AcceptRemoteSubscribe(payload.Ski, pair)
+		reportAsyncError("record SPINE subscription event", s.AcceptRemoteSubscribe(payload.Ski, pair))
 	case spineapi.ElementChangeRemove:
 		del, ok := subscriptionDelete(payload.Data)
 		if !ok {
@@ -182,7 +208,7 @@ func (s *Instance) noteSubscriptionEvent(payload spineapi.EventPayload) {
 		if del.ServerAddress != nil {
 			remove.Server = cloneAddress(*del.ServerAddress)
 		}
-		_ = s.ApplyRemoteDelete(payload.Ski, remove)
+		reportAsyncError("record SPINE subscription delete event", s.ApplyRemoteDelete(payload.Ski, remove))
 	}
 }
 

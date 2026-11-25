@@ -368,6 +368,11 @@ func (s *Instance) renewLostLocked(peer string, held []Pair) {
 		if !item.established || !item.wanted || item.pending != nil || item.renewCounter != nil {
 			continue
 		}
+		// The wire reply is a reconnect snapshot. An established subscribe
+		// sent on this connection is newer evidence than that snapshot.
+		if s.transport == nil && item.lastSubscribe != nil && item.lastWasSubscribe {
+			continue
+		}
 		if pairHeld(held, item.pair) {
 			continue
 		}
@@ -440,15 +445,21 @@ func (s *Instance) releaseLocked(peer string, role Role, pair Pair) {
 	s.flushReleaseLocked(item)
 }
 
-func (s *Instance) acceptServerLocked(peer string, pair Pair) bool {
-	if !s.canExchangeLocked(peer) {
-		return false
+func (s *Instance) checkRemoteSubscribeLocked(peer string) error {
+	if s.closed {
+		return errClosed
 	}
+	if !s.canExchangeLocked(peer) {
+		return errNoSPINE
+	}
+	return nil
+}
+
+func (s *Instance) acceptServerLocked(peer string, pair Pair) {
 	item := s.book.ensure(peer, RoleLocalServer, pair)
 	item.established = true
 	item.releaseQueued = false
 	item.releaseSent = false
-	return true
 }
 
 func (s *Instance) applyDeleteLocked(peer string, del Delete) int {

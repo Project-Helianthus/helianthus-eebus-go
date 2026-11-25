@@ -262,8 +262,8 @@ func (d *Directory) Join(node *Node) {
 	d.nodes = append(d.nodes, node)
 }
 
-// Publish makes every other joined node observe this node's announcement.
-// Observers record the remote as unpaired until they set their own SHIP state.
+// Publish updates the announcement at every other joined node without
+// changing that observer's SHIP connection or trust state.
 func (d *Directory) Publish(node *Node) {
 	if node == nil {
 		return
@@ -276,7 +276,10 @@ func (d *Directory) Publish(node *Node) {
 		if other == node {
 			continue
 		}
-		other.Observe(announcement, shipapi.ConnectionStateNone, false)
+		other.mu.Lock()
+		state := other.ship[announcement.TXT.SKI]
+		other.observeLocked(announcement, state.connection, state.trusted)
+		other.mu.Unlock()
 	}
 }
 

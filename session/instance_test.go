@@ -34,9 +34,9 @@ func testCertificate(t *testing.T) tls.Certificate {
 	return certificate
 }
 
-func openAt(t *testing.T, root string, port int, serial string, transport Transport) *Instance {
+func instanceConfig(t *testing.T, root string, port int, serial string, transport Transport) Config {
 	t.Helper()
-	instance, err := Open(Config{
+	return Config{
 		VendorCode:  "test",
 		Brand:       "helianthus",
 		Model:       "stack",
@@ -49,7 +49,12 @@ func openAt(t *testing.T, root string, port int, serial string, transport Transp
 		StateRoot:   root,
 		Host:        "local",
 		Transport:   transport,
-	})
+	}
+}
+
+func openAt(t *testing.T, root string, port int, serial string, transport Transport) *Instance {
+	t.Helper()
+	instance, err := Open(instanceConfig(t, root, port, serial, transport))
 	if err != nil {
 		t.Fatal(err)
 	}

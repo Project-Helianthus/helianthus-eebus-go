@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -79,6 +80,12 @@ func NewBrowser(localSKI string) *Browser {
 
 // Start begins browsing. The callback receives the current set.
 func (b *Browser) Start(on func([]Announcement)) error {
+	return b.start(on, zeroconf.Browse)
+}
+
+type browseFunc func(context.Context, string, string, chan<- *zeroconf.ServiceEntry, chan<- *zeroconf.ServiceEntry, ...zeroconf.ClientOption) error
+
+func (b *Browser) start(on func([]Announcement), browse browseFunc) error {
 	b.mu.Lock()
 	if b.cancel != nil {
 		b.mu.Unlock()
@@ -90,7 +97,7 @@ func (b *Browser) Start(on func([]Announcement)) error {
 	b.done = make(chan struct{})
 	done := b.done
 	b.mu.Unlock()
-	go b.loop(ctx, done)
+	go b.loop(ctx, done, browse)
 	return nil
 }
 
@@ -114,18 +121,20 @@ func (b *Browser) Stop() {
 	})
 }
 
-func (b *Browser) loop(ctx context.Context, done chan struct{}) {
+func (b *Browser) loop(ctx context.Context, done chan struct{}, browse browseFunc) {
 	defer close(done)
 	entries := make(chan *zeroconf.ServiceEntry, 32)
 	removed := make(chan *zeroconf.ServiceEntry, 32)
-	browseDone := make(chan struct{})
+	browseDone := make(chan error)
 	go func() {
-		defer close(browseDone)
-		_ = zeroconf.Browse(ctx, shipServiceType, shipDomain, entries, removed)
+		browseDone <- browse(ctx, shipServiceType, shipDomain, entries, removed)
 	}()
 	for {
 		select {
-		case <-browseDone:
+		case err := <-browseDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("SHIP mDNS browse failed", "error", err)
+			}
 			return
 		case entry, ok := <-entries:
 			if !ok {

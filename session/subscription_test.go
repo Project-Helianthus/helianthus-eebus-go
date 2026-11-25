@@ -1034,7 +1034,10 @@ func TestPendingSubscribeRetriesAfterReconnect(t *testing.T) {
 
 func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 	writer := &captureWriter{}
-	instance := openAt(t, t.TempDir(), 4781, "default-path", nil)
+	instance, err := prepareInstance(instanceConfig(t, t.TempDir(), 4781, "default-path", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = instance.Close() })
 	local := instance.LocalDevice()
 	entity := local.Entity([]model.AddressEntityType{1})
@@ -1077,13 +1080,17 @@ func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 	}
 	source := spine.NodeManagementAddress(&remoteDevice)
 	destination := instance.PrimaryNodeManagement()
-	feedSpine(t, remote, model.HeaderType{
-		AddressSource:       source,
-		AddressDestination:  &destination,
-		MsgCounter:          counterPtr(9001),
-		MsgCounterReference: counterPtr(measurementCounter),
-		CmdClassifier:       classifierPtr(model.CmdClassifierTypeResult),
-	}, model.CmdType{ResultData: &model.ResultDataType{ErrorNumber: errorNumberPtr(model.ErrorNumberTypeNoError)}})
+	accept := func(messageCounter, requestCounter uint64) {
+		t.Helper()
+		feedSpine(t, remote, model.HeaderType{
+			AddressSource:       source,
+			AddressDestination:  &destination,
+			MsgCounter:          counterPtr(messageCounter),
+			MsgCounterReference: counterPtr(requestCounter),
+			CmdClassifier:       classifierPtr(model.CmdClassifierTypeResult),
+		}, model.CmdType{ResultData: &model.ResultDataType{ErrorNumber: errorNumberPtr(model.ErrorNumberTypeNoError)}})
+	}
+	accept(9001, measurementCounter)
 	waitForPair(t, instance, skiRemoteA, measurementPair)
 	if establishedCount(instance, skiRemoteA) != 1 {
 		t.Fatalf("pending pair was established: %+v", instance.Established())
@@ -1135,9 +1142,25 @@ func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 		t.Fatalf("subscription data = %+v", entries)
 	}
 
-	readCounter, ok := subscriptionReadCounter(writer.snapshot())
+	if err := instance.Connect(skiRemoteA, false); err != nil {
+		t.Fatal(err)
+	}
+	local.RemoveRemoteDeviceConnection(skiRemoteA)
+	if err := instance.AttachRemote(skiRemoteA, writer); err != nil {
+		t.Fatal(err)
+	}
+	remote = local.RemoteDeviceForSki(skiRemoteA)
+	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+		DeviceAddress: &model.DeviceAddressType{Device: &remoteDevice},
+	})
+	beforeReconnect := len(writer.snapshot())
+	if err := instance.Connect(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	reconnectMessages := writer.snapshot()[beforeReconnect:]
+	readCounter, ok := subscriptionReadCounter(reconnectMessages)
 	if !ok {
-		t.Fatal("subscription data was not read from the peer")
+		t.Fatal("subscription data was not read from the reconnected peer")
 	}
 	beforeRenew := subscriptionRequests(writer.snapshot())
 	feedSpine(t, remote, model.HeaderType{
@@ -1155,10 +1178,35 @@ func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 		t.Fatalf("renewed %s", renewed[len(renewed)-1].server)
 	}
 
+	renewalCounter := renewed[len(renewed)-1].counter
+	accept(9004, renewalCounter)
+	loadCounter, ok := subscribeCounter(subscriptionRequests(reconnectMessages), loadPair)
+	if !ok {
+		t.Fatal("load subscription was not sent")
+	}
+	accept(9005, loadCounter)
+	waitForPair(t, instance, skiRemoteA, loadPair)
+	waitForResult(t, instance, skiRemoteA, renewalCounter)
+	if err := instance.Suspend(); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Reconcile(skiRemoteA); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(subscriptionRequests(writer.snapshot())); got != len(renewed) {
+		t.Fatalf("same-connection resume and reconcile sent %d extra subscribes", got-len(renewed))
+	}
+	if !pairEstablished(instance, skiRemoteA, measurementPair) || !pairEstablished(instance, skiRemoteA, loadPair) {
+		t.Fatalf("accepted pairs were not retained: %+v", instance.Established())
+	}
+
 	feedSpine(t, remote, model.HeaderType{
 		AddressSource:      source,
 		AddressDestination: &destination,
-		MsgCounter:         counterPtr(9004),
+		MsgCounter:         counterPtr(9006),
 		CmdClassifier:      classifierPtr(model.CmdClassifierTypeCall),
 	}, model.CmdType{NodeManagementSubscriptionDeleteCall: &model.NodeManagementSubscriptionDeleteCallType{
 		SubscriptionDelete: &model.SubscriptionManagementDeleteCallType{
@@ -1181,6 +1229,21 @@ func waitForPair(t *testing.T, instance *Instance, peer string, pair Pair) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("pair %s was not established: %+v", pair.Server.String(), instance.Established())
+}
+
+func waitForResult(t *testing.T, instance *Instance, peer string, counter uint64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		instance.mu.Lock()
+		_, pending := instance.book.byCounter[counterKey(peer, counter)]
+		instance.mu.Unlock()
+		if !pending {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("subscription result was not processed")
 }
 
 func pairEstablished(instance *Instance, peer string, pair Pair) bool {

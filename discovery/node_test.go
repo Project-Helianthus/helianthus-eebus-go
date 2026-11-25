@@ -83,3 +83,25 @@ func TestConnectionStateSurvivesALaterAnnouncement(t *testing.T) {
 		t.Fatalf("remote = %+v ok=%t", remote, ok)
 	}
 }
+
+func TestDirectoryPublishPreservesConnectionState(t *testing.T) {
+	const localSKI = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const peerSKI = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	observer := NewNode(announcement(localSKI, 4711, false))
+	peer := NewNode(announcement(peerSKI, 4712, false))
+	directory := NewDirectory()
+	directory.Join(observer)
+	directory.Join(peer)
+	directory.Publish(peer)
+	assertDiscovered(t, observer, peerSKI, false, shipapi.ConnectionStateNone)
+
+	observer.SetConnection(peerSKI, shipapi.ConnectionStateCompleted, true)
+	observer.SetShipID(peerSKI, "id-peer")
+	peer.SetRegister(true)
+	directory.Publish(peer)
+	assertDiscovered(t, observer, peerSKI, true, shipapi.ConnectionStateCompleted)
+	remote, _ := observer.Remote(peerSKI)
+	if !remote.Trusted || remote.ShipID != "id-peer" || !remote.Announcement.TXT.Register {
+		t.Fatalf("updated remote = %+v", remote)
+	}
+}
