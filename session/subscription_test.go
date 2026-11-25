@@ -1,10 +1,13 @@
 package session
 
 import (
+	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
 
 type sentSubscribe struct {
@@ -778,6 +781,103 @@ func TestCoincidentPeerCountersDoNotCollide(t *testing.T) {
 			t.Fatalf("accepted deletes left %+v", instance.Established())
 		}
 	})
+}
+
+type captureWriter struct {
+	mu       sync.Mutex
+	messages [][]byte
+}
+
+func (w *captureWriter) WriteShipMessageWithPayload(message []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.messages = append(w.messages, append([]byte(nil), message...))
+}
+
+func (w *captureWriter) snapshot() [][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([][]byte, len(w.messages))
+	copy(out, w.messages)
+	return out
+}
+
+type spineDeleteDatagram struct {
+	header model.HeaderType
+	del    model.SubscriptionManagementDeleteCallType
+}
+
+func spineSubscriptionDeletes(messages [][]byte) []spineDeleteDatagram {
+	out := make([]spineDeleteDatagram, 0)
+	for _, message := range messages {
+		var datagram model.Datagram
+		if err := json.Unmarshal(message, &datagram); err != nil {
+			continue
+		}
+		for _, cmd := range datagram.Datagram.Payload.Cmd {
+			call := cmd.NodeManagementSubscriptionDeleteCall
+			if call == nil || call.SubscriptionDelete == nil {
+				continue
+			}
+			out = append(out, spineDeleteDatagram{
+				header: datagram.Datagram.Header,
+				del:    *call.SubscriptionDelete,
+			})
+		}
+	}
+	return out
+}
+
+func TestReleaseServerSendsSpineDelete(t *testing.T) {
+	writer := &captureWriter{}
+	instance := openAt(t, t.TempDir(), 4755, "server-release", nil)
+	t.Cleanup(func() { _ = instance.Close() })
+	if err := instance.AttachRemote(skiRemoteA, writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Trust(skiRemoteA, true); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	pair := localServerPair(4, 4, 1, 2)
+	if err := instance.AcceptRemoteSubscribe(skiRemoteA, pair); err != nil {
+		t.Fatal(err)
+	}
+	before := len(writer.snapshot())
+	if err := instance.ReleaseServer(skiRemoteA, pair); err != nil {
+		t.Fatal(err)
+	}
+	deletes := spineSubscriptionDeletes(writer.snapshot()[before:])
+	if len(deletes) != 1 {
+		t.Fatalf("spine deletes = %d", len(deletes))
+	}
+	sent := deletes[0]
+	if sent.header.CmdClassifier == nil || *sent.header.CmdClassifier != model.CmdClassifierTypeCall {
+		t.Fatalf("classifier = %v", sent.header.CmdClassifier)
+	}
+	if sent.del.ClientAddress == nil || sent.del.ClientAddress.String() != pair.Client.String() {
+		t.Fatalf("client = %v", sent.del.ClientAddress)
+	}
+	if sent.del.ServerAddress == nil || sent.del.ServerAddress.String() != pair.Server.String() {
+		t.Fatalf("server = %v", sent.del.ServerAddress)
+	}
+	source := spine.NodeManagementAddress(&instance.localDevice)
+	destination := spine.NodeManagementAddress(pair.Client.Device)
+	if sent.header.AddressSource == nil || sent.header.AddressSource.String() != source.String() {
+		t.Fatalf("source = %v", sent.header.AddressSource)
+	}
+	if sent.header.AddressDestination == nil || sent.header.AddressDestination.String() != destination.String() {
+		t.Fatalf("destination = %v", sent.header.AddressDestination)
+	}
+	if len(instance.Established()) != 0 {
+		t.Fatalf("established = %+v", instance.Established())
+	}
+	entries, err := instance.SubscriptionData(skiRemoteA, instance.PrimaryNodeManagement())
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("subscription data = %d err=%v", len(entries), err)
+	}
+	if instance.Publish(pair.Server, model.FunctionTypeMeasurementListData, "released") != 0 {
+		t.Fatal("released local server pair was still published")
+	}
 }
 
 func trustAndConnect(t *testing.T, instance *Instance, skis ...string) {

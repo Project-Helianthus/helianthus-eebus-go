@@ -6,8 +6,11 @@ package session
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebus-go/discovery"
 	"github.com/Project-Helianthus/helianthus-eebus-go/service"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	shiputil "github.com/Project-Helianthus/helianthus-ship-go/util"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -23,11 +27,20 @@ import (
 )
 
 var (
-	errClosed     = errors.New("instance is closed")
-	errState      = errors.New("instance state root is missing")
-	errNoSPINE    = errors.New("remote is not ready for SPINE data")
-	errNotPrimary = errors.New("subscription read is not addressed to the primary node management")
+	errClosed       = errors.New("instance is closed")
+	errState        = errors.New("instance state root is missing")
+	errNoSPINE      = errors.New("remote is not ready for SPINE data")
+	errNotPrimary   = errors.New("subscription read is not addressed to the primary node management")
+	errNotListening = errors.New("ship node is not listening")
 )
+
+// hubWithoutMDNS is not a network interface name. The pinned hub starts SHIP
+// mDNS browse and announcement together, and that browse does not return from
+// shutdown while a discovered record is in flight, which would leave the SHIP
+// listener bound. The name is longer than an interface name, so the hub's
+// lookup fails before it starts a provider. announceSHIP publishes this
+// instance's SHIP §7 record on its own.
+const hubWithoutMDNS = "session-no-hub-mdns"
 
 // NotifyHandler receives a notify for one established subscription of this instance.
 type NotifyHandler func(peer string, pair Pair, function model.FunctionType, data any, at time.Time)
@@ -60,9 +73,11 @@ type notified struct {
 type Instance struct {
 	mu          sync.Mutex
 	closed      bool
+	listening   bool
 	suspended   bool
 	root        string
 	service     *service.Service
+	announce    *mdns.ZeroconfProvider
 	ski         string
 	port        int
 	localDevice model.AddressDeviceType
@@ -79,8 +94,9 @@ var _ api.ServiceReaderInterface = (*Instance)(nil)
 var _ api.PairingCandidateReader = (*Instance)(nil)
 var _ spineapi.EventHandlerInterface = (*Instance)(nil)
 
-// Open builds one SHIP node, trust store and SPINE local device from cfg and
-// loads feature pairs retained in the state root.
+// Open builds one SHIP node, trust store and SPINE local device from cfg,
+// starts that node's SHIP listener and mDNS announcement, and loads feature
+// pairs retained in the state root.
 func Open(cfg Config) (*Instance, error) {
 	info, err := os.Stat(cfg.StateRoot)
 	if err != nil || !info.IsDir() {
@@ -100,6 +116,7 @@ func Open(cfg Config) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	configuration.SetInterfaces([]string{hubWithoutMDNS})
 	instance := &Instance{
 		root:      cfg.StateRoot,
 		port:      cfg.Port,
@@ -115,6 +132,7 @@ func Open(cfg Config) (*Instance, error) {
 	}
 	local := instance.service.LocalService()
 	if local == nil {
+		instance.service.Shutdown()
 		return nil, errState
 	}
 	instance.ski = local.SKI()
@@ -138,13 +156,42 @@ func Open(cfg Config) (*Instance, error) {
 	})
 	stored, err := loadState(cfg.StateRoot)
 	if err != nil {
+		instance.service.Shutdown()
 		return nil, err
 	}
 	instance.book.adopt(stored)
 	if err := spine.Events.Subscribe(instance); err != nil {
+		instance.service.Shutdown()
 		return nil, err
 	}
+	// service.Start opens this instance's SHIP websocket on every interface.
+	// The listener accepts after Start returns. The hub does not browse.
+	instance.service.Start()
+	if err := waitSHIPListener(instance.port); err != nil {
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	if err := instance.announceSHIP(); err != nil {
+		_ = spine.Events.Unsubscribe(instance)
+		instance.service.Shutdown()
+		return nil, err
+	}
+	instance.listening = true
 	return instance, nil
+}
+
+// announceSHIP publishes this instance's SHIP §7 TXT record. The provider is
+// not asked to browse, so shutting it down does not wait on discovered records.
+func (s *Instance) announceSHIP() error {
+	announcement := s.view.Announcement()
+	provider := mdns.NewZeroconfProvider(nil)
+	if err := provider.Announce(announcement.Name, announcement.Port, announcement.TXT.Records()); err != nil {
+		provider.Shutdown()
+		return err
+	}
+	s.announce = provider
+	return nil
 }
 
 // Close stops this instance. Another instance in the same process is left running.
@@ -155,22 +202,63 @@ func (s *Instance) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.listening = false
 	pairs := s.book.durable()
 	root := s.root
 	svc := s.service
+	ann := s.announce
+	s.announce = nil
 	s.mu.Unlock()
 	_ = spine.Events.Unsubscribe(s)
+	if ann != nil {
+		ann.Shutdown()
+	}
 	if svc != nil {
 		svc.Shutdown()
 	}
 	return writeState(root, pairs)
 }
 
-// Running reports whether this instance is open.
+// Running reports whether this instance's SHIP listener is accepting connections.
 func (s *Instance) Running() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return !s.closed && s.service != nil && s.service.LocalDevice() != nil
+	closed := s.closed
+	listening := s.listening
+	port := s.port
+	s.mu.Unlock()
+	return !closed && listening && shipPortOpen(port)
+}
+
+func waitSHIPListener(port int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	var last error
+	for {
+		if err := dialSHIP(port); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("port %d: %w: %w", port, last, errNotListening)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func shipPortOpen(port int) bool {
+	return dialSHIP(port) == nil
+}
+
+func dialSHIP(port int) error {
+	if port <= 0 {
+		return errNotListening
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 200*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	return nil
 }
 
 // SKI is this instance's SHIP subject key identifier.
@@ -607,6 +695,43 @@ func (s *Instance) spineDelete(peer string, del Delete) SendResult {
 	server := cloneAddress(del.Server)
 	counter, failure := feature.RemoveRemoteSubscription(&server)
 	if failure != nil || counter == nil {
+		return SendResult{}
+	}
+	return SendResult{Counter: uint64(*counter), Sent: true}
+}
+
+// spineDeleteServer sends the subscription delete for a pair this instance
+// serves. The pinned RemoveRemoteSubscription only sends from a local client
+// feature, so the server partner sends the same delete call itself
+// (SPINE Protocol Specification 1.3.0 §7.4.1 rules 6–7, §7.4.4).
+func (s *Instance) spineDeleteServer(peer string, del Delete) SendResult {
+	if s.service == nil || s.service.LocalDevice() == nil || del.Client.Device == nil {
+		return SendResult{}
+	}
+	remote := s.service.LocalDevice().RemoteDeviceForSki(peer)
+	if remote == nil || remote.Sender() == nil {
+		return SendResult{}
+	}
+	client := cloneAddress(del.Client)
+	server := cloneAddress(del.Server)
+	sourceDevice := server.Device
+	if s.localDevice != "" {
+		device := s.localDevice
+		sourceDevice = &device
+	}
+	if sourceDevice == nil {
+		return SendResult{}
+	}
+	counter, err := remote.Sender().Request(
+		model.CmdClassifierTypeCall,
+		spine.NodeManagementAddress(sourceDevice),
+		spine.NodeManagementAddress(client.Device),
+		true,
+		[]model.CmdType{{
+			NodeManagementSubscriptionDeleteCall: spine.NewNodeManagementSubscriptionDeleteCallType(&client, &server),
+		}},
+	)
+	if err != nil || counter == nil {
 		return SendResult{}
 	}
 	return SendResult{Counter: uint64(*counter), Sent: true}

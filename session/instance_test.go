@@ -1,7 +1,9 @@
 package session
 
 import (
+	"bytes"
 	"crypto/tls"
+	"net"
 	"testing"
 	"time"
 
@@ -132,6 +134,121 @@ func TestNotifyReachesOnlyTheOwningInstance(t *testing.T) {
 	if _, _, ok := other.LastNotified(skiRemoteA, pair, model.FunctionTypeMeasurementListData); ok {
 		t.Fatal("other instance stored the notify")
 	}
+}
+
+func TestOpenRunsEachSHIPListener(t *testing.T) {
+	left := openAt(t, t.TempDir(), 4761, "listen-left", nil)
+	right := openAt(t, t.TempDir(), 4762, "listen-right", nil)
+	t.Cleanup(func() { _ = left.Close() })
+	t.Cleanup(func() { _ = right.Close() })
+
+	if !left.Running() || !right.Running() {
+		t.Fatalf("running left=%t right=%t", left.Running(), right.Running())
+	}
+	if !shipPortOpen(4761) || !shipPortOpen(4762) {
+		t.Fatal("SHIP listener is not accepting")
+	}
+	if !shipAnnouncementSeen(left.Discovery().Announcement().Name, left.SKI(), 2*time.Second) {
+		t.Fatal("left SHIP service was not announced")
+	}
+	if !shipAnnouncementSeen(right.Discovery().Announcement().Name, right.SKI(), 2*time.Second) {
+		t.Fatal("right SHIP service was not announced")
+	}
+
+	left.mu.Lock()
+	left.port = 0
+	left.mu.Unlock()
+	if left.Running() {
+		t.Fatal("running ignores the SHIP listener")
+	}
+	left.mu.Lock()
+	left.port = 4761
+	left.mu.Unlock()
+	if !left.Running() {
+		t.Fatal("SHIP listener was dropped")
+	}
+
+	if err := left.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for shipPortOpen(4761) {
+		if time.Now().After(deadline) {
+			t.Fatal("closed instance is still listening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if left.Running() {
+		t.Fatal("closed instance reports running")
+	}
+	if !right.Running() || !shipPortOpen(4762) {
+		t.Fatal("closing one instance stopped the other SHIP listener")
+	}
+	if shipAnnouncementSeen(left.Discovery().Announcement().Name, left.SKI(), time.Second) {
+		t.Fatal("closed instance is still announced")
+	}
+	if !shipAnnouncementSeen(right.Discovery().Announcement().Name, right.SKI(), 2*time.Second) {
+		t.Fatal("closing one instance stopped the other SHIP announcement")
+	}
+}
+
+func shipAnnouncementSeen(name, ski string, wait time.Duration) bool {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+	dst := &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353}
+	query := shipServiceQuery()
+	deadline := time.Now().Add(wait)
+	buf := make([]byte, 2048)
+	markers := [][]byte{
+		[]byte(name),
+		[]byte("path=/ship/"),
+		[]byte("ski=" + ski),
+		[]byte("register=false"),
+	}
+	for time.Now().Before(deadline) {
+		_ = conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+		_, _ = conn.WriteToUDP(query, dst)
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		for {
+			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				break
+			}
+			packet := buf[:n]
+			matched := true
+			for _, marker := range markers {
+				if !bytes.Contains(packet, marker) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shipServiceQuery is a unicast-response PTR query for the SHIP mDNS service.
+func shipServiceQuery() []byte {
+	name := []byte{
+		5, '_', 's', 'h', 'i', 'p',
+		4, '_', 't', 'c', 'p',
+		5, 'l', 'o', 'c', 'a', 'l',
+		0,
+	}
+	msg := make([]byte, 12+len(name)+4)
+	msg[0], msg[1] = 0, 1
+	msg[5] = 1
+	copy(msg[12:], name)
+	off := 12 + len(name)
+	msg[off], msg[off+1] = 0, 12
+	msg[off+2], msg[off+3] = 0x80, 1
+	return msg
 }
 
 func TestUnpairedDiscoveryKeepsSHIPState(t *testing.T) {

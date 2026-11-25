@@ -240,9 +240,14 @@ func (s *Instance) flushReleaseLocked(item *entry) {
 func (s *Instance) sendDeleteLocked(item *entry) SendResult {
 	del := Delete{Client: cloneAddress(item.pair.Client), Server: cloneAddress(item.pair.Server)}
 	var result SendResult
-	if s.transport != nil {
+	switch {
+	case s.transport != nil:
 		result = s.transport.SendDelete(item.peer, del)
-	} else {
+	case item.role == RoleLocalServer:
+		// The client address is the remote feature. The local-client delete looks
+		// that address up on this device and sends nothing (SPINE 1.3.0 §7.4.4).
+		result = s.spineDeleteServer(item.peer, del)
+	default:
 		result = s.spineDelete(item.peer, del)
 	}
 	if result.Sent && !result.Replay {
