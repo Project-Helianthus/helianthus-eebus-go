@@ -639,16 +639,21 @@ func (s *Instance) Publish(server model.FeatureAddressType, function model.Funct
 	return count
 }
 
-// HandleEvent delivers a SPINE data notify to this instance when the remote
-// belongs to it. The pinned spine-go event bus is process-wide; filtering keeps
-// each instance's handler separate. A subscription change is the pinned
-// manager's record of a remote subscribe or delete.
+// HandleEvent delivers a SPINE data notify to this instance when the event's
+// local feature, or the remote device of one connection, belongs to this
+// instance. The pinned spine-go event bus is process-wide, and two instances
+// may share a remote SKI. A subscription change is the pinned manager's
+// record of a remote subscribe or delete.
 func (s *Instance) HandleEvent(payload spineapi.EventPayload) {
-	if payload.EventType == spineapi.EventTypeSubscriptionChange {
-		s.noteSubscriptionEvent(payload)
+	if payload.EventType != spineapi.EventTypeSubscriptionChange &&
+		(payload.EventType != spineapi.EventTypeDataChange || payload.Ski == "") {
 		return
 	}
-	if payload.EventType != spineapi.EventTypeDataChange || payload.Ski == "" {
+	if !s.eventOwned(payload) {
+		return
+	}
+	if payload.EventType == spineapi.EventTypeSubscriptionChange {
+		s.noteSubscriptionEvent(payload)
 		return
 	}
 	ski := shiputil.NormalizeSKI(payload.Ski)
@@ -673,6 +678,47 @@ func (s *Instance) HandleEvent(payload spineapi.EventPayload) {
 	if noted && handler != nil {
 		handler(ski, pairCopy, payload.Function, payload.Data, at)
 	}
+}
+
+// eventOwned reports whether payload was produced for this instance.
+// A notify and a subscription change name the local feature that received
+// them. A data change without that feature names the remote device of one
+// connection. The remote SKI alone is not an instance.
+func (s *Instance) eventOwned(payload spineapi.EventPayload) bool {
+	if payload.LocalFeature != nil {
+		device := payload.LocalFeature.Device()
+		if device == nil || device.Address() == nil {
+			return false
+		}
+		return s.sameLocalDevice(*device.Address())
+	}
+	if payload.Device == nil {
+		return false
+	}
+	return s.sameRemoteDevice(payload.Device)
+}
+
+func (s *Instance) sameLocalDevice(address model.AddressDeviceType) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.localDevice != "" && address != "" && s.localDevice == address
+}
+
+func (s *Instance) sameRemoteDevice(device spineapi.DeviceRemoteInterface) bool {
+	if device == nil {
+		return false
+	}
+	s.mu.Lock()
+	var local spineapi.DeviceLocalInterface
+	if !s.closed && s.service != nil {
+		local = s.service.LocalDevice()
+	}
+	s.mu.Unlock()
+	if local == nil {
+		return false
+	}
+	owned := local.RemoteDeviceForSki(device.Ski())
+	return owned != nil && owned == device
 }
 
 func (s *Instance) noteNotifyLocked(ski string, pair Pair, function model.FunctionType, data any, at time.Time) (NotifyHandler, Pair, bool) {

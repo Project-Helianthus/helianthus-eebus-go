@@ -119,10 +119,11 @@ func TestNotifyReachesOnlyTheOwningInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := spineapi.EventPayload{
-		Ski:       skiRemoteA,
-		EventType: spineapi.EventTypeDataChange,
-		Function:  model.FunctionTypeMeasurementListData,
-		Data:      "notified-value",
+		Ski:          skiRemoteA,
+		EventType:    spineapi.EventTypeDataChange,
+		Function:     model.FunctionTypeMeasurementListData,
+		Data:         "notified-value",
+		LocalFeature: localFeature(t, owner, model.FeatureTypeTypeMeasurement, model.RoleTypeClient),
 	}
 	owner.HandleEvent(payload)
 	other.HandleEvent(payload)
@@ -136,6 +137,158 @@ func TestNotifyReachesOnlyTheOwningInstance(t *testing.T) {
 	if _, _, ok := other.LastNotified(skiRemoteA, pair, model.FunctionTypeMeasurementListData); ok {
 		t.Fatal("other instance stored the notify")
 	}
+}
+
+func TestSharedRemoteSKIEventsStayWithTheOwningInstance(t *testing.T) {
+	leftTransport := &offlinePeer{heldAnswered: true}
+	rightTransport := &offlinePeer{heldAnswered: true}
+	leftRoot := t.TempDir()
+	rightRoot := t.TempDir()
+	left := openAt(t, leftRoot, 4791, "shared-left", leftTransport)
+	right := openAt(t, rightRoot, 4792, "shared-right", rightTransport)
+	t.Cleanup(func() { _ = left.Close() })
+	t.Cleanup(func() { _ = right.Close() })
+
+	var leftHits, rightHits int
+	left.SetNotifyHandler(func(string, Pair, model.FunctionType, any, time.Time) { leftHits++ })
+	right.SetNotifyHandler(func(string, Pair, model.FunctionType, any, time.Time) { rightHits++ })
+
+	pair := measurementPair(11)
+	server := pair.Server
+	for _, instance := range []*Instance{left, right} {
+		if err := instance.Trust(skiRemoteA, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Connect(skiRemoteA, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(leftTransport.subscribes) != 1 || len(rightTransport.subscribes) != 1 {
+		t.Fatalf("subscribes left=%d right=%d", len(leftTransport.subscribes), len(rightTransport.subscribes))
+	}
+	if err := left.NoteResult(skiRemoteA, leftTransport.subscribes[0].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := right.NoteResult(skiRemoteA, rightTransport.subscribes[0].counter, true); err != nil {
+		t.Fatal(err)
+	}
+
+	leftFeature := localFeature(t, left, model.FeatureTypeTypeMeasurement, model.RoleTypeClient)
+	rightFeature := localFeature(t, right, model.FeatureTypeTypeMeasurement, model.RoleTypeClient)
+	notify := spineapi.EventPayload{
+		Ski:          skiRemoteA,
+		EventType:    spineapi.EventTypeDataChange,
+		Function:     model.FunctionTypeMeasurementListData,
+		Data:         "from-left-connection",
+		Feature:      remoteFeatureAddress{address: &server},
+		LocalFeature: leftFeature,
+	}
+	left.HandleEvent(notify)
+	right.HandleEvent(notify)
+	notify.Data = "from-right-connection"
+	notify.LocalFeature = rightFeature
+	left.HandleEvent(notify)
+	right.HandleEvent(notify)
+	if leftHits != 1 || rightHits != 1 {
+		t.Fatalf("hits left=%d right=%d", leftHits, rightHits)
+	}
+	leftValue, leftAt, leftOK := left.LastNotified(skiRemoteA, pair, model.FunctionTypeMeasurementListData)
+	rightValue, rightAt, rightOK := right.LastNotified(skiRemoteA, pair, model.FunctionTypeMeasurementListData)
+	if !leftOK || leftValue != "from-left-connection" || leftAt.IsZero() {
+		t.Fatalf("left cache value=%v at=%s ok=%t", leftValue, leftAt, leftOK)
+	}
+	if !rightOK || rightValue != "from-right-connection" || rightAt.IsZero() {
+		t.Fatalf("right cache value=%v at=%s ok=%t", rightValue, rightAt, rightOK)
+	}
+
+	leftServer := localFeature(t, left, model.FeatureTypeTypeMeasurement, model.RoleTypeServer)
+	kept := Pair{
+		Client:            featureAddress("d:_n:test_remote-a", 1, 21),
+		Server:            *leftServer.Address(),
+		ServerFeatureType: model.FeatureTypeTypeMeasurement,
+	}
+	if err := left.AcceptRemoteSubscribe(skiRemoteA, kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := right.AcceptRemoteSubscribe(skiRemoteA, kept); err != nil {
+		t.Fatal(err)
+	}
+	remove := spineapi.EventPayload{
+		Ski:          skiRemoteA,
+		EventType:    spineapi.EventTypeSubscriptionChange,
+		ChangeType:   spineapi.ElementChangeRemove,
+		LocalFeature: leftServer,
+		Data: model.SubscriptionManagementDeleteCallType{
+			ClientAddress: &kept.Client,
+			ServerAddress: &kept.Server,
+		},
+	}
+	left.HandleEvent(remove)
+	right.HandleEvent(remove)
+	if pairEstablished(left, skiRemoteA, kept) || !pairEstablished(right, skiRemoteA, kept) {
+		t.Fatalf("delete crossed instances left=%t right=%t", pairEstablished(left, skiRemoteA, kept), pairEstablished(right, skiRemoteA, kept))
+	}
+
+	added := Pair{
+		Client:            featureAddress("d:_n:test_remote-a", 1, 22),
+		Server:            *leftServer.Address(),
+		ServerFeatureType: model.FeatureTypeTypeMeasurement,
+	}
+	add := spineapi.EventPayload{
+		Ski:          skiRemoteA,
+		EventType:    spineapi.EventTypeSubscriptionChange,
+		ChangeType:   spineapi.ElementChangeAdd,
+		LocalFeature: leftServer,
+		Data: model.SubscriptionManagementRequestCallType{
+			ClientAddress:     &added.Client,
+			ServerAddress:     &added.Server,
+			ServerFeatureType: &added.ServerFeatureType,
+		},
+	}
+	left.HandleEvent(add)
+	right.HandleEvent(add)
+	if !pairEstablished(left, skiRemoteA, added) || pairEstablished(right, skiRemoteA, added) {
+		t.Fatalf("add crossed instances left=%t right=%t", pairEstablished(left, skiRemoteA, added), pairEstablished(right, skiRemoteA, added))
+	}
+	if !pairEstablished(left, skiRemoteA, pair) || !pairEstablished(right, skiRemoteA, pair) {
+		t.Fatal("client pair was dropped")
+	}
+
+	if err := right.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openAt(t, rightRoot, 4794, "shared-right", &offlinePeer{heldAnswered: true})
+	t.Cleanup(func() { _ = reopened.Close() })
+	if !pairEstablished(reopened, skiRemoteA, kept) || pairEstablished(reopened, skiRemoteA, added) {
+		t.Fatalf("reopened right kept=%t added=%t records=%+v", pairEstablished(reopened, skiRemoteA, kept), pairEstablished(reopened, skiRemoteA, added), reopened.Established())
+	}
+}
+
+type remoteFeatureAddress struct {
+	spineapi.FeatureRemoteInterface
+	address *model.FeatureAddressType
+}
+
+func (f remoteFeatureAddress) Address() *model.FeatureAddressType { return f.address }
+
+func localFeature(t *testing.T, instance *Instance, kind model.FeatureTypeType, role model.RoleType) spineapi.FeatureLocalInterface {
+	t.Helper()
+	device := instance.LocalDevice()
+	if device == nil {
+		t.Fatal("local device is missing")
+	}
+	entity := device.Entity([]model.AddressEntityType{1})
+	if entity == nil {
+		t.Fatal("local entity is missing")
+	}
+	feature := entity.GetOrAddFeature(kind, role)
+	if feature == nil || feature.Device() == nil || feature.Device().Address() == nil || feature.Address() == nil {
+		t.Fatal("local feature is missing")
+	}
+	return feature
 }
 
 func TestOpenRunsEachSHIPListener(t *testing.T) {

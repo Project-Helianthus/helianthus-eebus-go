@@ -1096,9 +1096,10 @@ func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 		ServerFeatureType: model.FeatureTypeTypeMeasurement,
 	}
 	instance.HandleEvent(spineapi.EventPayload{
-		Ski:        skiRemoteA,
-		EventType:  spineapi.EventTypeSubscriptionChange,
-		ChangeType: spineapi.ElementChangeAdd,
+		Ski:          skiRemoteA,
+		EventType:    spineapi.EventTypeSubscriptionChange,
+		ChangeType:   spineapi.ElementChangeAdd,
+		LocalFeature: measurement,
 		Data: model.SubscriptionManagementRequestCallType{
 			ClientAddress:     &serverPair.Client,
 			ServerAddress:     &serverPair.Server,
