@@ -411,10 +411,11 @@ func (s *Instance) Connect(ski string, up bool) error {
 	} else {
 		s.dropUnsentReleasesLocked(ski)
 		// The subscribe left the host and the connection is gone, so its
-		// result will not arrive. Cancel that counter and leave the
-		// selection wanted: the next discovery sends it again, and a late
-		// result for the cancelled counter does not establish the pair.
+		// result will not arrive. Leave the selection wanted: the next
+		// discovery sends it again. Counters from this connection are not
+		// persistent subscription information (SPINE 1.3.0 §7.4.1).
 		s.abandonPendingLocked(ski)
+		s.forgetConnectionCountersLocked(ski)
 		s.forgetPeerHeldLocked(ski)
 	}
 	return s.saveLocked()

@@ -915,6 +915,85 @@ func establishedCount(instance *Instance, peer string) int {
 	return count
 }
 
+func TestRestartedCounterEstablishesSubscribeAfterReconnect(t *testing.T) {
+	peer := &offlinePeer{heldAnswered: true}
+	peer.next = 3
+	instance := openAt(t, t.TempDir(), 4744, "counter-restart", peer)
+	t.Cleanup(func() { _ = instance.Close() })
+	pair := measurementPair(11)
+	if err := instance.Trust(skiRemoteA, true); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.subscribes) != 1 {
+		t.Fatalf("subscribes = %d", len(peer.subscribes))
+	}
+	original := peer.subscribes[0].counter
+	if err := instance.Connect(skiRemoteA, false); err != nil {
+		t.Fatal(err)
+	}
+	peer.next = original - 1
+	if err := instance.Connect(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.subscribes) != 2 || peer.subscribes[1].counter != original {
+		t.Fatalf("retried subscribe = %+v", peer.subscribes)
+	}
+	if err := instance.NoteResult(skiRemoteA, original, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Established()) != 1 {
+		t.Fatal("reused counter did not establish the subscribe")
+	}
+}
+
+func TestRestartedCounterDoesNotResolvePreviousDelete(t *testing.T) {
+	peer := &offlinePeer{heldAnswered: true}
+	instance := openAt(t, t.TempDir(), 4745, "counter-delete", peer)
+	t.Cleanup(func() { _ = instance.Close() })
+	pair := measurementPair(12)
+	if err := instance.Trust(skiRemoteA, true); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.NoteResult(skiRemoteA, peer.subscribes[0].counter, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Release(skiRemoteA, pair); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.deletes) != 1 {
+		t.Fatalf("deletes = %d", len(peer.deletes))
+	}
+	released := peer.deletes[0].counter
+	if err := instance.Connect(skiRemoteA, false); err != nil || instance.Connect(skiRemoteA, true) != nil {
+		t.Fatal(err)
+	}
+	if err := instance.NoteResult(skiRemoteA, released, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.deletes) != 1 {
+		t.Fatal("result on the new connection sent the previous delete again")
+	}
+	peer.next = released - 1
+	if err := instance.Select(skiRemoteA, []Pair{pair}); err != nil {
+		t.Fatal(err)
+	}
+	if len(peer.subscribes) != 2 || peer.subscribes[1].counter != released {
+		t.Fatalf("subscribes = %+v", peer.subscribes)
+	}
+	if err := instance.NoteResult(skiRemoteA, released, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Established()) != 1 {
+		t.Fatal("reused delete counter did not establish the new subscribe")
+	}
+}
+
 func TestPendingSubscribeRetriesAfterReconnect(t *testing.T) {
 	peer := &offlinePeer{heldAnswered: true}
 	instance := openAt(t, t.TempDir(), 4782, "pending-retry", peer)

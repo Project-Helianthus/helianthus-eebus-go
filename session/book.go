@@ -390,6 +390,42 @@ func (s *Instance) abandonPendingLocked(peer string) {
 	}
 }
 
+// forgetConnectionCountersLocked drops datagram numbers from one SHIP
+// connection. A later connection numbers its own datagrams from the start,
+// so a counter from this connection must not cancel, replay or resolve one
+// on the next (SPINE 1.3.0 §7.4.1 keeps the feature pair, not the counter).
+func (s *Instance) forgetConnectionCountersLocked(peer string) {
+	s.book.dropPeerCounters(peer)
+	for _, item := range s.book.byKey {
+		if item.peer != peer {
+			continue
+		}
+		item.pending = nil
+		item.lastSubscribe = nil
+		item.lastWasSubscribe = false
+		item.releaseCounter = nil
+		item.renewCounter = nil
+	}
+}
+
+func (b *book) dropPeerCounters(peer string) {
+	for ref := range b.cancelled {
+		if ref.peer == peer {
+			delete(b.cancelled, ref)
+		}
+	}
+	for ref := range b.byCounter {
+		if ref.peer == peer {
+			delete(b.byCounter, ref)
+		}
+	}
+	for ref := range b.releaseOf {
+		if ref.peer == peer {
+			delete(b.releaseOf, ref)
+		}
+	}
+}
+
 func (s *Instance) releaseLocked(peer string, role Role, pair Pair) {
 	item := s.book.get(peer, role, pair)
 	if item == nil {
