@@ -3,13 +3,28 @@ package usecase
 import (
 	"slices"
 
+	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/internal"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
+// EventOwned reports whether an event belongs to this running use case.
+func (u *UseCaseBase) EventOwned(payload spineapi.EventPayload) bool {
+	return u.eventScope.Owns(u.LocalEntity, payload)
+}
+
+// Stop makes the client and base ignore subsequent events, including queued dispatches.
+func (u *UseCaseBase) Stop() {
+	u.eventScope.Stop()
+}
+
 // handle SPINE events
 func (u *UseCaseBase) HandleEvent(payload spineapi.EventPayload) {
+	if !u.EventOwned(payload) {
+		return
+	}
+
 	if u.deviceOrEntityRemoved(payload) {
 		return
 	}
@@ -24,7 +39,14 @@ func (u *UseCaseBase) HandleEvent(payload spineapi.EventPayload) {
 }
 
 func (u *UseCaseBase) deviceOrEntityRemoved(payload spineapi.EventPayload) bool {
-	if internal.IsDeviceDisconnected(payload) || internal.IsEntityDisconnected(payload) {
+	if internal.IsDeviceDisconnected(payload) {
+		// Only the base consumes device removals. The client may see the same
+		// dispatch first, so retire the remembered remote here, not in the gate.
+		u.eventScope.ForgetRemote(payload.Device)
+		u.removeDeviceFromAvailableEntityScenarios(payload.Device)
+		return true
+	}
+	if internal.IsEntityDisconnected(payload) {
 		u.removeEntityFromAvailableEntityScenarios(payload.Entity)
 		return true
 	}
@@ -32,10 +54,35 @@ func (u *UseCaseBase) deviceOrEntityRemoved(payload spineapi.EventPayload) bool 
 	return false
 }
 
+func (u *UseCaseBase) removeDeviceFromAvailableEntityScenarios(device spineapi.DeviceRemoteInterface) {
+	var removed []spineapi.EntityRemoteInterface
+	u.mux.Lock()
+	u.availableEntityScenarios = slices.DeleteFunc(u.availableEntityScenarios, func(item api.RemoteEntityScenarios) bool {
+		if item.Entity.Device() != device {
+			return false
+		}
+		removed = append(removed, item.Entity)
+		return true
+	})
+	u.mux.Unlock()
+
+	if u.EventCB != nil {
+		for _, entity := range removed {
+			u.EventCB(device.Ski(), device, entity, u.useCaseUpdateEvent)
+		}
+	}
+}
+
 func (u *UseCaseBase) useCaseDataUpdate(
 	payload spineapi.EventPayload,
 ) {
 	remoteDevice := payload.Device
+	if remoteDevice == nil && payload.Entity != nil {
+		remoteDevice = payload.Entity.Device()
+	}
+	if remoteDevice == nil {
+		return
+	}
 
 	// go over the use cases and check which entity of the remote device supports the usecase
 	ucs := remoteDevice.UseCases()

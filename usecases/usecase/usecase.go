@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/internal"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/Project-Helianthus/helianthus-spine-go/spine"
@@ -28,7 +29,8 @@ type UseCaseBase struct {
 	validActorTypes  []model.UseCaseActorType // valid remote actor types for this use case
 	validEntityTypes []model.EntityTypeType   // valid remote entity types for this use case
 
-	mux sync.Mutex
+	eventScope internal.EventScope
+	mux        sync.Mutex
 }
 
 var _ api.UseCaseBaseInterface = (*UseCaseBase)(nil)
