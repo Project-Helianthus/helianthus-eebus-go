@@ -11,6 +11,10 @@ import (
 
 // handle SPINE events
 func (e *CEVC) HandleEvent(payload spineapi.EventPayload) {
+	if !e.EventOwned(payload) {
+		return
+	}
+
 	// only about events from an EV entity or device changes for this remote device
 
 	if !e.IsCompatibleEntityType(payload.Entity) {
