@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
+	"net/netip"
 	"strings"
 	"sync"
 
@@ -201,10 +203,19 @@ func announcementFrom(entry *zeroconf.ServiceEntry) (Announcement, bool) {
 	if host == "" {
 		return Announcement{}, false
 	}
+	var addresses []netip.Addr
+	for _, ips := range [][]net.IP{entry.AddrIPv4, entry.AddrIPv6} {
+		for _, ip := range ips {
+			if address, ok := netip.AddrFromSlice(ip); ok {
+				addresses = append(addresses, address.Unmap())
+			}
+		}
+	}
 	return Announcement{
-		Name: strings.TrimSuffix(entry.Instance, "."),
-		Host: host,
-		Port: entry.Port,
+		Name:      strings.TrimSuffix(entry.Instance, "."),
+		Host:      host,
+		Port:      entry.Port,
+		addresses: addresses,
 		TXT: TXT{
 			TXTVers:  "1",
 			ID:       elements["id"],

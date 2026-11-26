@@ -5,6 +5,8 @@ package discovery
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"sort"
 	"sync"
 
@@ -58,6 +60,21 @@ type Announcement struct {
 	Host string
 	Port int
 	TXT  TXT
+
+	addresses []netip.Addr
+}
+
+// SHIPEntry returns the endpoint and TXT fields for the SHIP hub's mDNS report.
+func (a Announcement) SHIPEntry() *shipapi.MdnsEntry {
+	entry := &shipapi.MdnsEntry{
+		Name: a.Name, Host: a.Host, Port: a.Port,
+		Ski: a.TXT.SKI, Identifier: a.TXT.ID, Path: a.TXT.Path, Register: a.TXT.Register,
+		Brand: a.TXT.Brand, Type: a.TXT.Type, Model: a.TXT.Model,
+	}
+	for _, address := range a.addresses {
+		entry.Addresses = append(entry.Addresses, net.IP(address.AsSlice()))
+	}
+	return entry
 }
 
 // Remote is a discovered service plus the SHIP state this instance holds for it.

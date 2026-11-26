@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebus-go/discovery"
+	"github.com/Project-Helianthus/helianthus-eebus-go/service"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	"github.com/Project-Helianthus/helianthus-ship-go/mdns"
@@ -430,6 +432,107 @@ func shipServiceQuery() []byte {
 	msg[off], msg[off+1] = 0, 12
 	msg[off+2], msg[off+3] = 0x80, 1
 	return msg
+}
+
+type passiveSHIPReader struct {
+	connected chan string
+}
+
+func (r passiveSHIPReader) RemoteSKIConnected(_ api.ServiceInterface, ski string) {
+	r.connected <- ski
+}
+
+func (passiveSHIPReader) RemoteSKIDisconnected(api.ServiceInterface, string) {}
+func (passiveSHIPReader) VisibleRemoteServicesUpdated(api.ServiceInterface, []shipapi.RemoteService) {
+}
+func (passiveSHIPReader) ServiceShipIDUpdate(string, string)                                {}
+func (passiveSHIPReader) ServicePairingDetailUpdate(string, *shipapi.ConnectionStateDetail) {}
+
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func TestDiscoveredTrustedPeerReceivesOutboundSHIPConnection(t *testing.T) {
+	for _, order := range []string{"discovery-before-trust", "trust-before-discovery"} {
+		t.Run(order, func(t *testing.T) {
+			active, err := prepareInstance(instanceConfig(t, t.TempDir(), freeLoopbackPort(t), "outbound", nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = active.Close() })
+			// Start SHIP without sending multicast; feed a synthetic browse result below.
+			active.hub.Start()
+
+			// The peer listens on loopback with discovery disabled. It cannot
+			// discover or initiate a connection to the instance under test.
+			port := freeLoopbackPort(t)
+			cfg, err := api.NewConfiguration("test", "helianthus", "stack", "passive",
+				model.DeviceTypeTypeEnergyManagementSystem, []model.EntityTypeType{model.EntityTypeTypeCEM},
+				port, testCertificate(t), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := passiveSHIPReader{connected: make(chan string, 1)}
+			peer := service.NewServiceWithOptions(cfg, reader, service.ServiceOptions{
+				ListenerPolicy: &service.ListenerPolicy{
+					ListenAddress: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)),
+				},
+			})
+			if err := peer.Setup(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(peer.Shutdown)
+			peer.RegisterRemoteSKI(active.SKI())
+			if err := peer.StartWithPolicy(); err != nil {
+				t.Fatal(err)
+			}
+			ski := peer.LocalService().SKI()
+			ann := discovery.Announcement{
+				Name: cfg.MdnsServiceName(), Host: "127.0.0.1", Port: port,
+				TXT: discovery.TXT{TXTVers: "1", ID: cfg.Identifier(), Path: discovery.WebsocketPath, SKI: ski},
+			}
+			if order == "discovery-before-trust" {
+				active.noteAnnouncements([]discovery.Announcement{ann})
+				if remote, ok := active.Discovery().Remote(ski); !ok || remote.Trusted || remote.Connection != shipapi.ConnectionStateNone {
+					t.Fatalf("untrusted discovery = %+v, present = %t", remote, ok)
+				}
+			}
+			if err := active.Trust(ski, true); err != nil {
+				t.Fatal(err)
+			}
+			if order == "trust-before-discovery" {
+				active.noteAnnouncements([]discovery.Announcement{ann})
+			}
+			select {
+			case got := <-reader.connected:
+				if got != active.SKI() {
+					t.Fatalf("connected SKI = %q, want %q", got, active.SKI())
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("passive peer did not complete an outbound SHIP handshake from the instance")
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				active.mu.Lock()
+				connected := active.connected[ski]
+				active.mu.Unlock()
+				if connected && active.LocalDevice().RemoteDeviceForSki(ski) != nil {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatal("instance did not attach the peer to its SPINE device after the handshake")
+		})
+	}
 }
 
 func TestInstanceDiscoversRemoteSHIPService(t *testing.T) {

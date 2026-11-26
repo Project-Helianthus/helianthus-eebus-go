@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,26 @@ func TestBrowserReportsBrowseFailure(t *testing.T) {
 	browser.Stop()
 	if got := logs.String(); !strings.Contains(got, "mDNS browse failed") || !strings.Contains(got, failure.Error()) {
 		t.Fatalf("browse failure not reported: %q", got)
+	}
+}
+
+func TestAnnouncementKeepsResolvedAddressesForSHIP(t *testing.T) {
+	const ski = "abababababababababababababababababababab"
+	entry := &zeroconf.ServiceEntry{
+		Port: 4791, HostName: "offline.local.",
+		AddrIPv4: []net.IP{net.ParseIP("192.0.2.10")},
+		AddrIPv6: []net.IP{net.ParseIP("2001:db8::10")},
+	}
+	entry.Instance = "offline-peer"
+	entry.Text = TXT{ID: "id-peer", SKI: ski, Register: true}.Records()
+	ann, ok := announcementFrom(entry)
+	if !ok {
+		t.Fatal("valid SHIP announcement rejected")
+	}
+	got := ann.SHIPEntry()
+	if got.Host != "offline.local" || len(got.Addresses) != 2 ||
+		!got.Addresses[0].Equal(net.ParseIP("192.0.2.10")) || !got.Addresses[1].Equal(net.ParseIP("2001:db8::10")) {
+		t.Fatalf("SHIP endpoint: host=%q addresses=%v", got.Host, got.Addresses)
 	}
 }
 

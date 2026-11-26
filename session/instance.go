@@ -16,8 +16,8 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebus-go/discovery"
-	"github.com/Project-Helianthus/helianthus-eebus-go/service"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/hub"
 	shiputil "github.com/Project-Helianthus/helianthus-ship-go/util"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -33,13 +33,6 @@ var (
 	errNotListening   = errors.New("ship node is not listening")
 	errNodeManagement = errors.New("node management feature is missing")
 )
-
-// pinnedMDNSUnstarted is not a network interface. The hub resolves it when mDNS
-// starts, fails, and leaves its Zeroconf browse unstarted. That browse's
-// Shutdown waits on a send its listener no longer receives once shutdown
-// cancels the browse, so Close would not return while a peer record is in
-// flight. This instance registers and browses the SHIP §7 service itself.
-const pinnedMDNSUnstarted = "session-ship-mdns-unstarted"
 
 // NotifyHandler receives a notify for one established subscription of this instance.
 type NotifyHandler func(peer string, pair Pair, function model.FunctionType, data any, at time.Time)
@@ -75,7 +68,9 @@ type Instance struct {
 	listening     bool
 	suspended     bool
 	root          string
-	service       *service.Service
+	hub           *hub.Hub
+	device        spineapi.DeviceLocalInterface
+	mdns          shipDiscovery
 	ski           string
 	port          int
 	localDevice   model.AddressDeviceType
@@ -107,22 +102,21 @@ func Open(cfg Config) (*Instance, error) {
 		return nil, err
 	}
 	if err := spine.Events.Subscribe(instance); err != nil {
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
-	// service.Start opens this instance's SHIP websocket. The hub mDNS browse
-	// stays unstarted; this instance registers and browses the SHIP §7 record.
-	instance.service.Start()
+	// Start installs the hub as the recipient of this instance's browse results.
+	instance.hub.Start()
 	if err := waitSHIPListener(instance.port); err != nil {
 		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
 	instance.browser = discovery.NewBrowser(instance.ski)
 	if err := instance.browser.Start(instance.noteAnnouncements); err != nil {
 		instance.browser = nil
 		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
 	registration, err := discovery.Register(instance.view.Announcement())
@@ -130,7 +124,7 @@ func Open(cfg Config) (*Instance, error) {
 		instance.browser.Stop()
 		instance.browser = nil
 		_ = spine.Events.Unsubscribe(instance)
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
 	instance.registration = registration
@@ -157,7 +151,6 @@ func prepareInstance(cfg Config) (*Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	configuration.SetInterfaces([]string{pinnedMDNSUnstarted})
 	instance := &Instance{
 		root:          cfg.StateRoot,
 		port:          cfg.Port,
@@ -171,18 +164,8 @@ func prepareInstance(cfg Config) (*Instance, error) {
 		peerHeldAsked: make(map[string]bool),
 		heldCounter:   make(map[string]uint64),
 	}
-	instance.service = service.NewService(configuration, instance)
-	if err := instance.service.Setup(); err != nil {
+	if err := instance.setupSHIP(configuration, cfg.Register); err != nil {
 		return nil, err
-	}
-	local := instance.service.LocalService()
-	if local == nil {
-		instance.service.Shutdown()
-		return nil, errState
-	}
-	instance.ski = local.SKI()
-	if address := instance.service.LocalDevice().Address(); address != nil {
-		instance.localDevice = *address
 	}
 	instance.view = discovery.NewNode(discovery.Announcement{
 		Name: configuration.MdnsServiceName(),
@@ -201,7 +184,7 @@ func prepareInstance(cfg Config) (*Instance, error) {
 	})
 	stored, err := loadState(cfg.StateRoot)
 	if err != nil {
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
 	instance.book.adopt(stored)
@@ -209,16 +192,10 @@ func prepareInstance(cfg Config) (*Instance, error) {
 	// in-memory remote-client list. ProcessCmd looks the feature up on the
 	// entity, so this instance answers from the retained pairs instead.
 	if err := instance.installRetainedRead(); err != nil {
-		instance.service.Shutdown()
+		instance.hub.Shutdown()
 		return nil, err
 	}
-	if local := instance.service.LocalDevice(); local != nil && local.NodeManagement() != nil {
-		local.NodeManagement().AddResultCallback(instance.onSpineResult)
-	}
-	if err := instance.service.SetPairingRegistration(cfg.Register); err != nil {
-		instance.service.Shutdown()
-		return nil, err
-	}
+	instance.device.NodeManagement().AddResultCallback(instance.onSpineResult)
 	return instance, nil
 }
 
@@ -233,7 +210,7 @@ func (s *Instance) Close() error {
 	s.listening = false
 	pairs := s.book.durable()
 	root := s.root
-	svc := s.service
+	ship := s.hub
 	browser := s.browser
 	registration := s.registration
 	s.browser = nil
@@ -248,8 +225,11 @@ func (s *Instance) Close() error {
 	if registration != nil {
 		registration.Close()
 	}
-	if svc != nil {
-		svc.Shutdown()
+	if ship != nil {
+		ship.Shutdown()
+	}
+	if s.view != nil {
+		s.view.ReplaceAnnouncements(nil)
 	}
 	return writeState(root, pairs)
 }
@@ -314,10 +294,7 @@ func (s *Instance) Port() int {
 func (s *Instance) LocalDevice() spineapi.DeviceLocalInterface {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.service == nil {
-		return nil
-	}
-	return s.service.LocalDevice()
+	return s.device
 }
 
 // Discovery is this instance's discovery view.
@@ -350,10 +327,10 @@ func (s *Instance) SetNotifyHandler(handler NotifyHandler) {
 func (s *Instance) AttachRemote(ski string, writer shipapi.ShipConnectionDataWriterInterface) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.service == nil || s.service.LocalDevice() == nil {
+	if s.closed || s.device == nil {
 		return errClosed
 	}
-	s.service.LocalDevice().SetupRemoteDevice(shiputil.NormalizeSKI(ski), writer)
+	s.device.SetupRemoteDevice(shiputil.NormalizeSKI(ski), writer)
 	return nil
 }
 
@@ -368,14 +345,14 @@ func (s *Instance) Trust(ski string, trusted bool) error {
 		s.mu.Unlock()
 		return errClosed
 	}
-	svc := s.service
+	ship := s.hub
 	if trusted {
 		s.trusted[ski] = true
 		s.view.SetConnection(ski, shipapi.ConnectionStateTrusted, true)
 		s.flushLocked(ski)
 		err := s.saveLocked()
 		s.mu.Unlock()
-		svc.RegisterRemoteSKI(ski)
+		ship.RegisterRemoteSKI(ski)
 		return err
 	}
 	for _, item := range s.peerEntriesLocked(ski) {
@@ -392,7 +369,7 @@ func (s *Instance) Trust(ski string, trusted bool) error {
 	s.dropRemainingLocked(ski)
 	err := s.saveLocked()
 	s.mu.Unlock()
-	svc.UnregisterRemoteSKI(ski)
+	ship.UnregisterRemoteSKI(ski)
 	return err
 }
 
@@ -722,8 +699,8 @@ func (s *Instance) sameRemoteDevice(device spineapi.DeviceRemoteInterface) bool 
 	}
 	s.mu.Lock()
 	var local spineapi.DeviceLocalInterface
-	if !s.closed && s.service != nil {
-		local = s.service.LocalDevice()
+	if !s.closed {
+		local = s.device
 	}
 	s.mu.Unlock()
 	if local == nil {
@@ -803,10 +780,10 @@ func (s *Instance) spineDelete(peer string, del Delete) SendResult {
 // feature, so the server partner sends the same delete call itself
 // (SPINE Protocol Specification 1.3.0 §7.4.1 rules 6–7, §7.4.4).
 func (s *Instance) spineDeleteServer(peer string, del Delete) SendResult {
-	if s.service == nil || s.service.LocalDevice() == nil || del.Client.Device == nil {
+	if s.device == nil || del.Client.Device == nil {
 		return SendResult{}
 	}
-	remote := s.service.LocalDevice().RemoteDeviceForSki(peer)
+	remote := s.device.RemoteDeviceForSki(peer)
 	if remote == nil || remote.Sender() == nil {
 		return SendResult{}
 	}
@@ -836,7 +813,7 @@ func (s *Instance) spineDeleteServer(peer string, del Delete) SendResult {
 }
 
 func (s *Instance) spineNotify(peer string, pair Pair, function model.FunctionType, data any) error {
-	local := s.service.LocalDevice()
+	local := s.device
 	if local == nil {
 		return errClosed
 	}
@@ -855,11 +832,11 @@ func (s *Instance) spineNotify(peer string, pair Pair, function model.FunctionTy
 }
 
 func (s *Instance) localFeature(address model.FeatureAddressType) spineapi.FeatureLocalInterface {
-	if s.service == nil || s.service.LocalDevice() == nil {
+	if s.device == nil {
 		return nil
 	}
 	copied := cloneAddress(address)
-	return s.service.LocalDevice().FeatureByAddress(&copied)
+	return s.device.FeatureByAddress(&copied)
 }
 
 func (s *Instance) peerEntriesLocked(peer string) []*entry {
@@ -915,6 +892,7 @@ func (s *Instance) noteAnnouncements(found []discovery.Announcement) {
 		return
 	}
 	view.ReplaceAnnouncements(found)
+	s.mdns.replace(found)
 }
 
 // VisibleRemoteServicesUpdated records discovered SKIs that have no snapshot yet.

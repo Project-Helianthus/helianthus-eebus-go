@@ -19,7 +19,7 @@ type retainedRead struct {
 }
 
 func (s *Instance) installRetainedRead() error {
-	local := s.service.LocalDevice()
+	local := s.device
 	if local == nil {
 		return errNodeManagement
 	}
@@ -73,7 +73,7 @@ func (f *retainedRead) detailedDiscovery(message *spineapi.Message) *model.Error
 		return pinned
 	}
 	peer := shiputil.NormalizeSKI(message.DeviceRemote.Ski())
-	if !s.closed && s.canExchangeLocked(peer) && s.service.LocalDevice().RemoteDeviceForSki(peer) == message.DeviceRemote {
+	if !s.closed && s.canExchangeLocked(peer) && s.device.RemoteDeviceForSki(peer) == message.DeviceRemote {
 		s.reconcileLocked(peer)
 		persistErr = s.saveLocked()
 	}
@@ -286,16 +286,16 @@ func (s *Instance) forgetPeerHeldLocked(peer string) {
 }
 
 func (s *Instance) sendSubscriptionRead(peer string) (uint64, bool) {
-	if s.service == nil || s.service.LocalDevice() == nil || s.service.LocalDevice().NodeManagement() == nil {
+	if s.device == nil || s.device.NodeManagement() == nil {
 		return 0, false
 	}
-	remote := s.service.LocalDevice().RemoteDeviceForSki(peer)
+	remote := s.device.RemoteDeviceForSki(peer)
 	if remote == nil || remote.Sender() == nil || remote.Address() == nil {
 		return 0, false
 	}
 	counter, err := remote.Sender().Request(
 		model.CmdClassifierTypeCall,
-		s.service.LocalDevice().NodeManagement().Address(),
+		s.device.NodeManagement().Address(),
 		spine.NodeManagementAddress(remote.Address()),
 		true,
 		[]model.CmdType{{
