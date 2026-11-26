@@ -487,7 +487,8 @@ func (s *Instance) release(ski string, role Role, pair Pair) error {
 	return s.saveLocked()
 }
 
-// Run sends queued subscribes and deletes for one remote.
+// Run sends queued subscribes and deletes for one remote and retries an unsent
+// subscription-data read on the SPINE connection.
 func (s *Instance) Run(ski string) error {
 	ski = shiputil.NormalizeSKI(ski)
 	s.mu.Lock()
@@ -496,6 +497,9 @@ func (s *Instance) Run(ski string) error {
 		return errClosed
 	}
 	s.flushLocked(ski)
+	if s.transport == nil && s.canExchangeLocked(ski) {
+		s.peerHeldLocked(ski)
+	}
 	return s.saveLocked()
 }
 
@@ -648,8 +652,13 @@ func (s *Instance) Publish(server model.FeatureAddressType, function model.Funct
 // may share a remote SKI. A subscription change is the pinned manager's
 // record of a remote subscribe or delete.
 func (s *Instance) HandleEvent(payload spineapi.EventPayload) {
-	if payload.EventType != spineapi.EventTypeSubscriptionChange &&
-		(payload.EventType != spineapi.EventTypeDataChange || payload.Ski == "") {
+	switch payload.EventType {
+	case spineapi.EventTypeDataChange:
+		if payload.Ski == "" || payload.CmdClassifier == nil || *payload.CmdClassifier != model.CmdClassifierTypeNotify {
+			return
+		}
+	case spineapi.EventTypeSubscriptionChange:
+	default:
 		return
 	}
 	if !s.eventOwned(payload) {

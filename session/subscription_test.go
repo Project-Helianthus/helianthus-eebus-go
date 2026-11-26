@@ -1095,6 +1095,41 @@ func TestPendingSubscribeRetriesAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestRunRetriesSubscriptionReadAfterConnect(t *testing.T) {
+	instance := prepareTestInstance(t, "run-read", nil)
+	writer := &captureWriter{}
+	if err := instance.AttachRemote(skiRemoteA, writer); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Trust(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Connect(skiRemoteA, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := subscriptionReadCounter(writer.snapshot()); ok {
+		t.Fatal("subscription data was read before the peer's SPINE address was known")
+	}
+	remote := instance.LocalDevice().RemoteDeviceForSki(skiRemoteA)
+	remoteDevice := model.AddressDeviceType("d:_n:test_remote-a")
+	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+		DeviceAddress: &model.DeviceAddressType{Device: &remoteDevice},
+	})
+	if err := instance.Run(skiRemoteA); err != nil {
+		t.Fatal(err)
+	}
+	messages := writer.snapshot()
+	if _, ok := subscriptionReadCounter(messages); !ok {
+		t.Fatal("Run did not retry the subscription-data read")
+	}
+	if err := instance.Run(skiRemoteA); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := subscriptionReadCounter(writer.snapshot()[len(messages):]); ok {
+		t.Fatal("Run repeated the outstanding subscription-data read")
+	}
+}
+
 func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 	writer := &captureWriter{}
 	instance, err := prepareInstance(instanceConfig(t, t.TempDir(), 4781, "default-path", nil))
@@ -1213,13 +1248,24 @@ func TestDefaultPathResolvesResultReconcilesAndAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote = local.RemoteDeviceForSki(skiRemoteA)
-	remote.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
-		DeviceAddress: &model.DeviceAddressType{Device: &remoteDevice},
-	})
 	beforeReconnect := len(writer.snapshot())
-	if err := instance.Connect(skiRemoteA, true); err != nil {
-		t.Fatal(err)
+	instance.RemoteSKIConnected(nil, skiRemoteA)
+	if _, ok := subscriptionReadCounter(writer.snapshot()[beforeReconnect:]); ok {
+		t.Fatal("subscription data was read before the peer's SPINE address was known")
 	}
+	feedSpine(t, remote, model.HeaderType{
+		AddressSource:       source,
+		AddressDestination:  &destination,
+		MsgCounter:          counterPtr(9000),
+		MsgCounterReference: counterPtr(1), // initial detailed-discovery request on the new sender
+		CmdClassifier:       classifierPtr(model.CmdClassifierTypeReply),
+	}, model.CmdType{NodeManagementDetailedDiscoveryData: &model.NodeManagementDetailedDiscoveryDataType{
+		DeviceInformation: &model.NodeManagementDetailedDiscoveryDeviceInformationType{
+			Description: &model.NetworkManagementDeviceDescriptionDataType{
+				DeviceAddress: &model.DeviceAddressType{Device: &remoteDevice},
+			},
+		},
+	}})
 	reconnectMessages := writer.snapshot()[beforeReconnect:]
 	readCounter, ok := subscriptionReadCounter(reconnectMessages)
 	if !ok {

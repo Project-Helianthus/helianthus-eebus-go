@@ -52,9 +52,32 @@ func (f *retainedRead) HandleMessage(message *spineapi.Message) *model.ErrorType
 		return f.remove(message)
 	case message.Cmd.NodeManagementSubscriptionRequestCall != nil && message.CmdClassifier == model.CmdClassifierTypeCall:
 		return f.request(message)
+	case message.Cmd.NodeManagementDetailedDiscoveryData != nil && message.CmdClassifier == model.CmdClassifierTypeReply:
+		return f.detailedDiscovery(message)
 	default:
 		return f.FeatureLocalInterface.HandleMessage(message)
 	}
+}
+
+func (f *retainedRead) detailedDiscovery(message *spineapi.Message) *model.ErrorType {
+	s := f.instance
+	var persistErr error
+	s.mu.Lock()
+	defer func() {
+		s.mu.Unlock()
+		reportAsyncError("reconcile SPINE detailed discovery", persistErr)
+	}()
+	// SPINE sets the peer's address here, after SHIP's connected callback.
+	// Serialize that update with reads of the address in Connect and Run.
+	if pinned := f.FeatureLocalInterface.HandleMessage(message); pinned != nil {
+		return pinned
+	}
+	peer := shiputil.NormalizeSKI(message.DeviceRemote.Ski())
+	if !s.closed && s.canExchangeLocked(peer) && s.service.LocalDevice().RemoteDeviceForSki(peer) == message.DeviceRemote {
+		s.reconcileLocked(peer)
+		persistErr = s.saveLocked()
+	}
+	return nil
 }
 
 func (f *retainedRead) answer(message *spineapi.Message) *model.ErrorType {
@@ -98,7 +121,10 @@ func (f *retainedRead) remove(message *spineapi.Message) *model.ErrorType {
 	if call.SubscriptionDelete.ServerAddress != nil {
 		del.Server = *call.SubscriptionDelete.ServerAddress
 	}
-	if f.instance.removeRemoteDelete(message.DeviceRemote.Ski(), del) {
+	removed, err := f.instance.removeRemoteDelete(message.DeviceRemote.Ski(), del)
+	// Keep the live delete even when persisting it fails, as for a request.
+	reportAsyncError("persist SPINE subscription delete", err)
+	if removed {
 		return nil
 	}
 	return pinned
@@ -143,18 +169,17 @@ func (f *retainedRead) request(message *spineapi.Message) *model.ErrorType {
 	return nil
 }
 
-func (s *Instance) removeRemoteDelete(ski string, del Delete) bool {
+func (s *Instance) removeRemoteDelete(ski string, del Delete) (bool, error) {
 	ski = shiputil.NormalizeSKI(ski)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || !s.trusted[ski] {
-		return false
+		return false, nil
 	}
 	if s.applyDeleteLocked(ski, del) == 0 {
-		return false
+		return false, nil
 	}
-	_ = s.saveLocked()
-	return true
+	return true, s.saveLocked()
 }
 
 func reportAsyncError(operation string, err error) {
@@ -296,7 +321,7 @@ func (s *Instance) deliverPeerHeld(peer string, counter uint64, data *model.Node
 	s.peerHeldReady[peer] = true
 	delete(s.peerHeldAsked, peer)
 	s.mu.Unlock()
-	_ = s.Reconcile(peer)
+	reportAsyncError("reconcile SPINE subscription data", s.Reconcile(peer))
 }
 
 func pairsFromSubscription(data *model.NodeManagementSubscriptionDataType) []Pair {

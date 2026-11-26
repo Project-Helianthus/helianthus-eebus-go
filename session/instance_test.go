@@ -95,13 +95,20 @@ func TestTwoInstancesKeepSeparateRemotes(t *testing.T) {
 	}
 }
 
+func prepareTestInstance(t *testing.T, serial string, transport Transport) *Instance {
+	t.Helper()
+	instance, err := prepareInstance(instanceConfig(t, t.TempDir(), 4721, serial, transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close() })
+	return instance
+}
+
 func TestNotifyReachesOnlyTheOwningInstance(t *testing.T) {
 	transport := &offlinePeer{heldAnswered: true}
-	root := t.TempDir()
-	owner := openAt(t, root, 4721, "owner", transport)
-	other := openAt(t, t.TempDir(), 4722, "other", &offlinePeer{heldAnswered: true})
-	t.Cleanup(func() { _ = owner.Close() })
-	t.Cleanup(func() { _ = other.Close() })
+	owner := prepareTestInstance(t, "owner", transport)
+	other := prepareTestInstance(t, "other", &offlinePeer{heldAnswered: true})
 
 	var ownerHits, otherHits int
 	owner.SetNotifyHandler(func(string, Pair, model.FunctionType, any, time.Time) { ownerHits++ })
@@ -130,6 +137,19 @@ func TestNotifyReachesOnlyTheOwningInstance(t *testing.T) {
 		Data:         "notified-value",
 		LocalFeature: localFeature(t, owner, model.FeatureTypeTypeMeasurement, model.RoleTypeClient),
 	}
+	for name, classifier := range map[string]*model.CmdClassifierType{
+		"missing": nil, "reply": classifierPtr(model.CmdClassifierTypeReply), "write": classifierPtr(model.CmdClassifierTypeWrite),
+	} {
+		payload.CmdClassifier = classifier
+		owner.HandleEvent(payload)
+		if value, at, ok := owner.LastNotified(skiRemoteA, pair, payload.Function); ok || value != nil || !at.IsZero() {
+			t.Errorf("%s classifier populated cache: value=%v at=%v ok=%t", name, value, at, ok)
+		}
+	}
+	if ownerHits != 0 {
+		t.Errorf("non-notify events delivered %d handler calls", ownerHits)
+	}
+	payload.CmdClassifier = classifierPtr(model.CmdClassifierTypeNotify)
 	owner.HandleEvent(payload)
 	other.HandleEvent(payload)
 	if ownerHits != 1 || otherHits != 0 {
@@ -184,12 +204,13 @@ func TestSharedRemoteSKIEventsStayWithTheOwningInstance(t *testing.T) {
 	leftFeature := localFeature(t, left, model.FeatureTypeTypeMeasurement, model.RoleTypeClient)
 	rightFeature := localFeature(t, right, model.FeatureTypeTypeMeasurement, model.RoleTypeClient)
 	notify := spineapi.EventPayload{
-		Ski:          skiRemoteA,
-		EventType:    spineapi.EventTypeDataChange,
-		Function:     model.FunctionTypeMeasurementListData,
-		Data:         "from-left-connection",
-		Feature:      remoteFeatureAddress{address: &server},
-		LocalFeature: leftFeature,
+		Ski:           skiRemoteA,
+		EventType:     spineapi.EventTypeDataChange,
+		Function:      model.FunctionTypeMeasurementListData,
+		Data:          "from-left-connection",
+		CmdClassifier: classifierPtr(model.CmdClassifierTypeNotify),
+		Feature:       remoteFeatureAddress{address: &server},
+		LocalFeature:  leftFeature,
 	}
 	left.HandleEvent(notify)
 	right.HandleEvent(notify)

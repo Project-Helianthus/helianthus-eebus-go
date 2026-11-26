@@ -119,9 +119,26 @@ func TestSessionCallbacksReportErrors(t *testing.T) {
 	instance.onSpineResult(spineapi.ResponseMessage{DeviceRemote: subscriptionRemote{}})
 	instance.RemoteSKIConnected(nil, skiRemoteA)
 	instance.RemoteSKIDisconnected(nil, skiRemoteA)
+
+	instance.acceptServerLocked(skiRemoteA, pair)
+	feature := &retainedRead{FeatureLocalInterface: &subscribeHandler{}, instance: instance}
+	if result := feature.HandleMessage(&spineapi.Message{
+		DeviceRemote: subscriptionRemote{}, CmdClassifier: model.CmdClassifierTypeCall,
+		Cmd: model.CmdType{NodeManagementSubscriptionDeleteCall: &model.NodeManagementSubscriptionDeleteCallType{
+			SubscriptionDelete: &model.SubscriptionManagementDeleteCallType{ClientAddress: &pair.Client, ServerAddress: &pair.Server},
+		}},
+	}); result != nil || len(instance.Established()) != 0 {
+		t.Fatalf("delete result=%+v records=%+v", result, instance.Established())
+	}
+
+	instance.heldCounter = map[string]uint64{skiRemoteA: 1}
+	instance.peerHeld = make(map[string][]Pair)
+	instance.peerHeldReady = make(map[string]bool)
+	instance.deliverPeerHeld(skiRemoteA, 1, &model.NodeManagementSubscriptionDataType{})
 	for _, want := range []string{
 		"record SPINE subscription event", errNoSPINE.Error(),
 		"record SPINE subscription result", "record SHIP connect", "record SHIP disconnect", stateFileName,
+		"persist SPINE subscription delete", "reconcile SPINE subscription data",
 	} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("missing %q in diagnostics: %s", want, logs.String())
