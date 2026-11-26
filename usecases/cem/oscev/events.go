@@ -9,6 +9,10 @@ import (
 
 // handle SPINE events
 func (e *OSCEV) HandleEvent(payload spineapi.EventPayload) {
+	if !e.EventOwned(payload) {
+		return
+	}
+
 	// most of the events are identical to OPEV, and OPEV is required to be used,
 	// we don't handle the same events in here
 

@@ -11,6 +11,10 @@ import (
 
 // handle SPINE events
 func (e *LPC) HandleEvent(payload spineapi.EventPayload) {
+	if !e.EventOwned(payload) {
+		return
+	}
+
 	if !e.IsCompatibleEntityType(payload.Entity) {
 		return
 	}

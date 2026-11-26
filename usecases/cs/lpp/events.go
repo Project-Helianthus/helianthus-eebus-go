@@ -12,6 +12,10 @@ import (
 
 // handle SPINE events
 func (e *LPP) HandleEvent(payload spineapi.EventPayload) {
+	if !e.EventOwned(payload) {
+		return
+	}
+
 	if internal.IsDeviceConnected(payload) {
 		e.deviceConnected(payload)
 		return
