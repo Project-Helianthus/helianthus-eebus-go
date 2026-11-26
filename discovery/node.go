@@ -16,6 +16,12 @@ import (
 // WebsocketPath is the SHIP websocket path carried in the mDNS TXT path entry.
 const WebsocketPath = "/ship/"
 
+// Values of the register key in a SHIP TXT record.
+const (
+	registerTrue  = "true"
+	registerFalse = "false"
+)
+
 // TXT is the SHIP §7 service record this instance announces or observes.
 type TXT struct {
 	TXTVers  string
@@ -30,9 +36,9 @@ type TXT struct {
 
 // Records returns the TXT entries in the order used for a SHIP announcement.
 func (t TXT) Records() []string {
-	register := "false"
+	register := registerFalse
 	if t.Register {
-		register = "true"
+		register = registerTrue
 	}
 	txtvers := t.TXTVers
 	if txtvers == "" {

@@ -192,7 +192,7 @@ func announcementFrom(entry *zeroconf.ServiceEntry) (Announcement, bool) {
 	if elements["txtvers"] != "1" || elements["id"] == "" || elements["path"] == "" {
 		return Announcement{}, false
 	}
-	if register != "true" && register != "false" {
+	if register != registerTrue && register != registerFalse {
 		return Announcement{}, false
 	}
 	ski := shiputil.NormalizeSKI(elements["ski"])
@@ -221,7 +221,7 @@ func announcementFrom(entry *zeroconf.ServiceEntry) (Announcement, bool) {
 			ID:       elements["id"],
 			Path:     elements["path"],
 			SKI:      ski,
-			Register: register == "true",
+			Register: register == registerTrue,
 			Brand:    elements["brand"],
 			Type:     elements["type"],
 			Model:    elements["model"],
