@@ -216,7 +216,11 @@ func (s *Instance) Close() error {
 	s.browser = nil
 	s.registration = nil
 	s.mu.Unlock()
-	_ = spine.Events.Unsubscribe(s)
+	if ship == nil {
+		s.restoreRetainedRead()
+	} else {
+		_ = spine.Events.Unsubscribe(s)
+	}
 	// Stop the browse while peer records are still in flight, then withdraw
 	// this instance's announcement, then close the SHIP listener.
 	if browser != nil {
@@ -234,11 +238,12 @@ func (s *Instance) Close() error {
 	return writeState(root, pairs)
 }
 
-// Running reports whether this instance's SHIP listener is accepting connections.
+// Running reports whether this instance's own SHIP listener is accepting
+// connections. An attached instance does not own a listener.
 func (s *Instance) Running() bool {
 	s.mu.Lock()
 	closed := s.closed
-	listening := s.listening
+	listening := s.hub != nil && s.listening
 	port := s.port
 	s.mu.Unlock()
 	return !closed && listening && shipPortOpen(port)
@@ -336,8 +341,8 @@ func (s *Instance) AttachRemote(ski string, writer shipapi.ShipConnectionDataWri
 
 // Trust records SHIP trust for a remote (SHIP 1.0.1 §12.3.2, §13.4.4.1).
 // Revoking trust removes that remote's feature pairs.
-// The hub reports the resulting SHIP state back through this instance, so the
-// call into the service is made without the instance lock.
+// An attached instance only records the driver's trust update. For Open, the
+// hub reports its resulting state back, so calls to it run outside the lock.
 func (s *Instance) Trust(ski string, trusted bool) error {
 	ski = shiputil.NormalizeSKI(ski)
 	s.mu.Lock()
@@ -352,7 +357,9 @@ func (s *Instance) Trust(ski string, trusted bool) error {
 		s.flushLocked(ski)
 		err := s.saveLocked()
 		s.mu.Unlock()
-		ship.RegisterRemoteSKI(ski)
+		if ship != nil {
+			ship.RegisterRemoteSKI(ski)
+		}
 		return err
 	}
 	for _, item := range s.peerEntriesLocked(ski) {
@@ -369,7 +376,9 @@ func (s *Instance) Trust(ski string, trusted bool) error {
 	s.dropRemainingLocked(ski)
 	err := s.saveLocked()
 	s.mu.Unlock()
-	ship.UnregisterRemoteSKI(ski)
+	if ship != nil {
+		ship.UnregisterRemoteSKI(ski)
+	}
 	return err
 }
 
