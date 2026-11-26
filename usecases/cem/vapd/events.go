@@ -11,6 +11,10 @@ import (
 
 // handle SPINE events
 func (e *VAPD) HandleEvent(payload spineapi.EventPayload) {
+	if !e.EventOwned(payload) {
+		return
+	}
+
 	// only about events from an SGMW entity or device changes for this remote device
 
 	if !e.IsCompatibleEntityType(payload.Entity) {

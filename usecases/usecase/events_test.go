@@ -1,11 +1,43 @@
 package usecase
 
 import (
+	"testing"
+
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/spine"
 	"github.com/Project-Helianthus/helianthus-spine-go/util"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestEventOwnedDeviceRemoval(t *testing.T) {
+	local := spine.NewDeviceLocal("", "", "", "", "local", model.DeviceTypeTypeEnergyManagementSystem, "")
+	base := &UseCaseBase{LocalEntity: spine.NewEntityLocal(local, model.EntityTypeTypeCEM, []model.AddressEntityType{1}, 0)}
+	old := spine.NewDeviceRemote(local, "departing-ski", nil)
+	other := spine.NewDeviceRemote(local, "remaining-ski", nil)
+	for _, peer := range []*spine.DeviceRemote{old, other} {
+		peer.UpdateDevice(&model.NetworkManagementDeviceDescriptionDataType{
+			DeviceAddress: &model.DeviceAddressType{Device: util.Ptr(model.AddressDeviceType("same-address"))},
+		})
+		local.AddRemoteDeviceForSki(peer.Ski(), peer)
+		require.True(t, base.EventOwned(spineapi.EventPayload{Device: peer, Ski: peer.Ski()}))
+	}
+	for i, peer := range []*spine.DeviceRemote{old, other, old} {
+		entity := spine.NewEntityRemote(peer, model.EntityTypeTypeEV, []model.AddressEntityType{model.AddressEntityType(i + 1)})
+		peer.AddEntity(entity)
+		base.updateRemoteEntityScenarios(entity, []model.UseCaseScenarioSupportType{1})
+	}
+	require.Len(t, base.RemoteEntitiesScenarios(), 3)
+
+	local.RemoveRemoteDevice(old.Ski())
+	base.HandleEvent(spineapi.EventPayload{
+		Device: old, Ski: old.Ski(), EventType: spineapi.EventTypeDeviceChange, ChangeType: spineapi.ElementChangeRemove,
+	})
+	remaining := base.RemoteEntitiesScenarios()
+	require.Len(t, remaining, 1)
+	assert.Same(t, other, remaining[0].Entity.Device())
+}
 
 func (s *UseCaseSuite) Test_HandleEvent() {
 	payload := spineapi.EventPayload{}
